@@ -1,27 +1,6 @@
 # Snyk ADS Sandbox Kit
 
-> ## ⚠️ Experimental
->
-> **Snyk Evo was not designed for Docker Sandboxes.** It was built for developer workstations and
-> CI runners — long-lived machines with a stable identity and a known owner. Sandboxes are
-> ephemeral, disposable and anonymous by default, which is close to the opposite.
->
-> Most of it works anyway. The guard hooks install cleanly, the sandbox registers, and agent
-> activity lands in the Evo console. What's rough is everything downstream of *machine identity*,
-> because that's the assumption sandboxes break:
->
-> - **The Machines tab fills up.** Sandboxes spin up and die; nothing expires them. At any real
->   scale the view degrades fast.
-> - **Attribution is manual.** Nothing maps a sandbox back to the person who launched it unless
->   you pass it yourself — see `SANDBOX_USER` in [Quick start](#quick-start).
-> - **Agent-scan inventory is a snapshot.** It runs once at creation, so MCP servers and skills
->   added mid-session aren't picked up. [`snyk-ads-next/`](./snyk-ads-next/) is an opt-in attempt
->   at fixing this and the point above.
->
-> These are gaps in Evo rather than bugs in the kit, and they're open questions we're working
-> through — no committed fix or timeline. Nothing here is a supported Snyk product: no SLA, no
-> support ticket path. Raise problems as issues on this repo. Treat it as a working integration
-> to evaluate and demo — not something to point production governance at yet.
+> This is an experimental Kit and should be considered a tech preview. Evo was not built directly for Docker Sandboxes and some gaps and limitations may appear. Although, most of it does work. 
 
 A [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) kit (`kind: mixin`) that installs
 **Snyk ADS** — the Agent Detection & Response guard hooks — into a Claude sandbox, so every tool
@@ -34,10 +13,12 @@ The kit does four things:
 3. Downloads the correct architecture of the ADS installer and runs it as the agent user.
 4. Verifies the guard hooks were actually written, and fails loudly if they weren't.
 
-**Requires `sbx` 0.38.0 or later** (0.39.0 if you want `--env-file`). The `files/` staging
+**Requires** `sbx` **0.38.0 or later** (0.39.0 if you want `--env-file`). The `files/` staging
 directory this kit depends on landed in 0.38.0.
 
 ---
+
+
 
 ## Folder structure
 
@@ -68,10 +49,12 @@ evo-ads-docker-sandbox-kit/
 Anything under `files/` is copied into the sandbox **before** the `setup.install` commands run,
 with `files/home/` mapping to `/home/agent/`. So:
 
-| Path in the kit                                 | Path inside the VM                          |
-| ----------------------------------------------- | ------------------------------------------- |
-| `files/home/corp-ca/zscaler-root-ca.crt`        | `/home/agent/corp-ca/zscaler-root-ca.crt`   |
-| `files/home/corp-ca/anything-else.crt`          | `/home/agent/corp-ca/anything-else.crt`     |
+
+| Path in the kit                          | Path inside the VM                        |
+| ---------------------------------------- | ----------------------------------------- |
+| `files/home/corp-ca/zscaler-root-ca.crt` | `/home/agent/corp-ca/zscaler-root-ca.crt` |
+| `files/home/corp-ca/anything-else.crt`   | `/home/agent/corp-ca/anything-else.crt`   |
+
 
 The first install step globs `/home/agent/corp-ca/*.crt` and installs every match into the system
 trust store. Drop in as many certs as your proxy chain needs; you don't edit `spec.yaml` to add one.
@@ -82,25 +65,29 @@ To vendor the kit inside another project, copy the whole `snyk-ads/` directory a
 
 ### Two kits, and which to use
 
-**`snyk-ads/` is the supported one.** Use it unless you have a reason not to.
+`snyk-ads/` **is the supported one.** Use it unless you have a reason not to.
 
 `snyk-ads-next/` is an opt-in proposal that adds per-sandbox machine identity (from
 `SANDBOX_NAME` + `SANDBOX_ID`, new in sbx 0.39.0) and a `startup` hook that re-runs the
 agent-scan inventory on every sandbox start rather than only at creation. It exists so those two
 changes can be reviewed as a working spec rather than as a diff in a thread.
 
-| | `snyk-ads/` | `snyk-ads-next/` |
-| --- | --- | --- |
-| Status | Supported | Proposed, opt-in |
-| Minimum `sbx` | 0.38.0 | **0.39.0** |
-| Machine identity | One shared identity — all sandboxes collapse to a single console row | Unique per sandbox |
-| Inventory refresh | Once, at creation | Every sandbox start |
-| Unverified assumptions | None | Two, both flagged in its README |
+
+|                        | `snyk-ads/`                                                          | `snyk-ads-next/`                |
+| ---------------------- | -------------------------------------------------------------------- | ------------------------------- |
+| Status                 | Supported                                                            | Proposed, opt-in                |
+| Minimum `sbx`          | 0.38.0                                                               | **0.39.0**                      |
+| Machine identity       | One shared identity — all sandboxes collapse to a single console row | Unique per sandbox              |
+| Inventory refresh      | Once, at creation                                                    | Every sandbox start             |
+| Unverified assumptions | None                                                                 | Two, both flagged in its README |
+
 
 Full rationale, the fixes applied to the original proposal, and what still needs confirming
-against a shipped binary: [`snyk-ads-next/README.md`](./snyk-ads-next/README.md).
+against a shipped binary: `[snyk-ads-next/README.md](./snyk-ads-next/README.md)`.
 
 ---
+
+
 
 ## Staging the corporate CA certificate
 
@@ -109,7 +96,7 @@ without a cert — the CA step is **non-fatal by design** and just prints a warn
 
 The directory already exists at `snyk-ads/files/home/corp-ca/` — it has its own
 [README](./snyk-ads/files/home/corp-ca/README.md) and an
-[`example-root-ca.crt.example`](./snyk-ads/files/home/corp-ca/example-root-ca.crt.example)
+`[example-root-ca.crt.example](./snyk-ads/files/home/corp-ca/example-root-ca.crt.example)`
 showing the exact format expected. You just add the real cert next to them.
 
 ### 1. Export your root CA in PEM form
@@ -154,14 +141,20 @@ openssl x509 -in snyk-ads/files/home/corp-ca/zscaler-root-ca.crt -noout -text \
   | grep -A1 'Basic Constraints'
 ```
 
+
+
 ### Four things that will bite you here
 
-| Gotcha | Why it matters |
-| --- | --- |
-| **Must be PEM, not DER.** | The file has to start with `-----BEGIN CERTIFICATE-----`. A binary `.cer` from a browser export will be staged happily and then ignored by `update-ca-certificates`. Convert with `openssl x509 -inform der -in in.cer -out out.crt`. |
-| **Must have a `.crt` extension.** | `update-ca-certificates` only picks up `*.crt`. A file named `zscaler.pem` is copied into the VM and silently does nothing. |
-| **Must be the ROOT, not the leaf.** | Trusting the intercepted server cert doesn't establish the chain. You want the self-signed CA at the top. |
+
+| Gotcha                                 | Why it matters                                                                                                                                                                                                                                 |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Must be PEM, not DER.**              | The file has to start with `-----BEGIN CERTIFICATE-----`. A binary `.cer` from a browser export will be staged happily and then ignored by `update-ca-certificates`. Convert with `openssl x509 -inform der -in in.cer -out out.crt`.          |
+| **Must have a** `.crt` **extension.**  | `update-ca-certificates` only picks up `*.crt`. A file named `zscaler.pem` is copied into the VM and silently does nothing.                                                                                                                    |
+| **Must be the ROOT, not the leaf.**    | Trusting the intercepted server cert doesn't establish the chain. You want the self-signed CA at the top.                                                                                                                                      |
 | **Don't commit a cert you shouldn't.** | A corporate root CA is a public key, not a secret — but check your org's policy before pushing it. `snyk-ads/files/home/corp-ca/*.crt` is gitignored here by default; `git add -f <path>` if you deliberately want to share it with your team. |
+
+
+
 
 ### What the kit deliberately does *not* do
 
@@ -176,15 +169,19 @@ replacement — that's why it's safe. **If you fork this kit, keep that line.**
 
 ---
 
+
+
 ## The two credentials
 
-| | `SNYK_TENANT_ID` | `SNYK_ADS_PUSH_KEY` |
-| --- | --- | --- |
-| What it is | A UUID identifying your tenant. Not a secret. | The credential the guard hooks push agent activity with. |
-| Where to get it | Snyk Evo console → Settings → General | Snyk Evo console → Settings. Shown once. |
-| How it reaches the VM | `-e SNYK_TENANT_ID=<uuid>` | `-e SNYK_ADS_PUSH_KEY` (bare name, value from your shell) |
-| Where it ends up | An installer flag. Not persisted. | Written to the hook config on disk inside the VM, in plaintext. |
-| Treat it as | An identifier — fine in a runbook. | A live secret. Store in 1Password; rotate if printed. |
+
+|                       | `SNYK_TENANT_ID`                              | `SNYK_ADS_PUSH_KEY`                                             |
+| --------------------- | --------------------------------------------- | --------------------------------------------------------------- |
+| What it is            | A UUID identifying your tenant. Not a secret. | The credential the guard hooks push agent activity with.        |
+| Where to get it       | Snyk Evo console → Settings → General         | Snyk Evo console → Settings. Shown once.                        |
+| How it reaches the VM | `-e SNYK_TENANT_ID=<uuid>`                    | `-e SNYK_ADS_PUSH_KEY` (bare name, value from your shell)       |
+| Where it ends up      | An installer flag. Not persisted.             | Written to the hook config on disk inside the VM, in plaintext. |
+| Treat it as           | An identifier — fine in a runbook.            | A live secret. Store in 1Password; rotate if printed.           |
+
 
 Only one of these is a secret. Treating the tenant ID as one costs ergonomics and buys nothing.
 
@@ -195,6 +192,8 @@ boundary here is the microVM plus the egress allow-list, not the absence of the 
 the [How-To Guide](./docs/Snyk_ADS_Sandbox_Kit_-_How-To_Guide.pdf).
 
 ---
+
+
 
 ## Quick start
 
@@ -215,16 +214,20 @@ sbx run claude --kit ./snyk-ads --name $(hostname)-sandbox \
 
 Four lines, four reasons:
 
-| | Why |
-| --- | --- |
+
+|                              | Why                                                                                                                                                                                                                                                                     |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--name $(hostname)-sandbox` | The Evo console identifies machines by hostname. Without a name you get an `sbx`-generated one and you're guessing which row is yours in **Agent Behavior → Machines**. Deriving it from your hostname makes the sandbox traceable back to the laptop that launched it. |
-| `-e SNYK_TENANT_ID=<uuid>` | A literal is fine here — the tenant ID is an identifier, not a secret. Preflight rejects anything that isn't a UUID. |
-| `-e SNYK_ADS_PUSH_KEY` | **No `=value`.** A bare name tells `sbx` to lift the value out of your current environment, keeping the secret out of shell history and out of `ps` argv. Don't "fix" it by adding the literal. |
-| `-e SANDBOX_USER=$(whoami)` | The spec maps this to `USER` inside the VM. Without it, activity attributes to the sandbox's default `agent` user and every engineer's sessions look identical in the console. |
+| `-e SNYK_TENANT_ID=<uuid>`   | A literal is fine here — the tenant ID is an identifier, not a secret. Preflight rejects anything that isn't a UUID.                                                                                                                                                    |
+| `-e SNYK_ADS_PUSH_KEY`       | **No** `=value`**.** A bare name tells `sbx` to lift the value out of your current environment, keeping the secret out of shell history and out of `ps` argv. Don't "fix" it by adding the literal.                                                                     |
+| `-e SANDBOX_USER=$(whoami)`  | The spec maps this to `USER` inside the VM. Without it, activity attributes to the sandbox's default `agent` user and every engineer's sessions look identical in the console.                                                                                          |
+
 
 > **The tenant ID above is masked.** Replace it with your own full UUID from
 > Evo → Settings → General. The value as written will fail preflight — deliberately, so a
 > copy-paste can't silently point your activity at someone else's tenant.
+
+
 
 ### On identity and attribution
 
@@ -248,6 +251,8 @@ That works here because this mixin only touches the three fields a mixin can add
 `environment.variables`, `setup.install` and `permissions.network.allow`.
 
 ---
+
+
 
 ## Verify
 
@@ -284,17 +289,21 @@ If the row is there but attributed to `agent` rather than you, you launched with
 
 ---
 
+
+
 ## Network policy
 
 The kit allows five domains and nothing else:
 
-| Domain | Why |
-| --- | --- |
-| `downloads.snyk.io` | Installer download |
-| `api.snyk.io` | `REMOTE_HOOKS_BASE_URL` |
-| `evo.snyk.io` | Steady-state pushes |
-| `app.snyk.io` | Console callbacks |
+
+| Domain               | Why                          |
+| -------------------- | ---------------------------- |
+| `downloads.snyk.io`  | Installer download           |
+| `api.snyk.io`        | `REMOTE_HOOKS_BASE_URL`      |
+| `evo.snyk.io`        | Steady-state pushes          |
+| `app.snyk.io`        | Console callbacks            |
 | `registry.npmjs.org` | The ADS installer's npm step |
+
 
 > **Under organization governance, kit-level allow rules are ignored.** Docker's docs are explicit
 > about this: only org allow rules grant access. If governance is on in your org, these five
@@ -303,44 +312,52 @@ The kit allows five domains and nothing else:
 
 ---
 
+
+
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `curl exit 60` or `77` | TLS trust — the proxy's root CA isn't in the store. | Stage the **root** CA at `files/home/corp-ca/<name>.crt`, PEM, `.crt` extension. |
-| `curl exit 6` or `7` | Egress blocked. Not a cert problem. | Org governance overrides kit allow rules — `sbx policy ls`. |
-| `curl exit 22` | HTTP error from `downloads.snyk.io`. | Usually a wrong architecture path; the kit detects arch, so check the printed `linux-<arch>` line. |
-| `corp-ca: WARNING no .crt files found` | Nothing under `files/home/corp-ca/`, or `sbx` < 0.38.0. | Non-fatal. Only a problem if the install then fails with 60/77. Check `sbx version`. |
-| `SNYK_TENANT_ID is not a valid tenant ID` | A tenant *name* or a truncated paste. | Copy the UUID from Settings → General. |
-| `SNYK_ADS_PUSH_KEY is not set` | Expired `op` session, nearly always. | `op whoami`, then `eval $(op signin)`, then re-export. |
-| `invalid character in secret reference: '('` | 1Password item title contains parentheses. | Rename to a clean handle, or use the item UUID. |
-| `/token` reference fails | API Credential items store the value in a field named `credential`, not `token`. | `op item get <item>` to list real field names. |
-| npm step fails TLS but curl worked | Node ignores the system trust bundle. | Already handled by `NODE_EXTRA_CA_CERTS`. Don't remove it if you fork. |
-| Install succeeds, no hooks in settings | Install ran as root, hooks went to `/root/.claude/`. | Already handled by `user: "1000"`. Don't remove it. |
-| `--kit can only be used when creating a new sandbox` | It's a creation-time flag. | `sbx kit add <sandbox> ./snyk-ads/` |
-| Clean install, console stays empty | Key is well-formed but wrong, revoked, or from another tenant. Preflight checks shape, not authorisation. | Re-mint the push key and confirm it matches the tenant ID. |
-| Can't tell which console row is your sandbox | Launched without `--name`, so `sbx` generated one. | `--name $(hostname)-sandbox` at create time. Not changeable afterwards. |
-| Sessions attributed to `agent`, not you | `SANDBOX_USER` wasn't passed. | `-e SANDBOX_USER=$(whoami)`. If it persists, uncomment `LOGNAME` in the spec. |
-| Every sandbox shows as one row in the console | `MACHINE_ID` is set. | Leave it commented out in the spec — setting it collapses all sandboxes together. |
+
+| Symptom                                              | Cause                                                                                                     | Fix                                                                                                |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `curl exit 60` or `77`                               | TLS trust — the proxy's root CA isn't in the store.                                                       | Stage the **root** CA at `files/home/corp-ca/<name>.crt`, PEM, `.crt` extension.                   |
+| `curl exit 6` or `7`                                 | Egress blocked. Not a cert problem.                                                                       | Org governance overrides kit allow rules — `sbx policy ls`.                                        |
+| `curl exit 22`                                       | HTTP error from `downloads.snyk.io`.                                                                      | Usually a wrong architecture path; the kit detects arch, so check the printed `linux-<arch>` line. |
+| `corp-ca: WARNING no .crt files found`               | Nothing under `files/home/corp-ca/`, or `sbx` < 0.38.0.                                                   | Non-fatal. Only a problem if the install then fails with 60/77. Check `sbx version`.               |
+| `SNYK_TENANT_ID is not a valid tenant ID`            | A tenant *name* or a truncated paste.                                                                     | Copy the UUID from Settings → General.                                                             |
+| `SNYK_ADS_PUSH_KEY is not set`                       | Expired `op` session, nearly always.                                                                      | `op whoami`, then `eval $(op signin)`, then re-export.                                             |
+| `invalid character in secret reference: '('`         | 1Password item title contains parentheses.                                                                | Rename to a clean handle, or use the item UUID.                                                    |
+| `/token` reference fails                             | API Credential items store the value in a field named `credential`, not `token`.                          | `op item get <item>` to list real field names.                                                     |
+| npm step fails TLS but curl worked                   | Node ignores the system trust bundle.                                                                     | Already handled by `NODE_EXTRA_CA_CERTS`. Don't remove it if you fork.                             |
+| Install succeeds, no hooks in settings               | Install ran as root, hooks went to `/root/.claude/`.                                                      | Already handled by `user: "1000"`. Don't remove it.                                                |
+| `--kit can only be used when creating a new sandbox` | It's a creation-time flag.                                                                                | `sbx kit add <sandbox> ./snyk-ads/`                                                                |
+| Clean install, console stays empty                   | Key is well-formed but wrong, revoked, or from another tenant. Preflight checks shape, not authorisation. | Re-mint the push key and confirm it matches the tenant ID.                                         |
+| Can't tell which console row is your sandbox         | Launched without `--name`, so `sbx` generated one.                                                        | `--name $(hostname)-sandbox` at create time. Not changeable afterwards.                            |
+| Sessions attributed to `agent`, not you              | `SANDBOX_USER` wasn't passed.                                                                             | `-e SANDBOX_USER=$(whoami)`. If it persists, uncomment `LOGNAME` in the spec.                      |
+| Every sandbox shows as one row in the console        | `MACHINE_ID` is set.                                                                                      | Leave it commented out in the spec — setting it collapses all sandboxes together.                  |
+
+
+
 
 ### When the create won't come up at all
 
 There's a diagnostic twin of this kit (`snyk-ads-diag`) that runs the same CA and network steps but
-where **every step ends `exit 0`** and takes no credentials. The point is to get a sandbox that
+where **every step ends** `exit 0` and takes no credentials. The point is to get a sandbox that
 actually boots so you can run the real installer by hand with its stderr visible. Reach for it when
 you can't tell a TLS failure from an egress failure from the outside.
 
 ---
 
+
+
 ## Design notes for anyone forking this
 
 Three lines in `spec.yaml` look removable and are not:
 
-- **`user: "1000"` on the install step.** Install defaults to root; as root the installer writes
-  hooks to `/root/.claude/` and the agent never loads them.
-- **`set -eu` in the install step.** Without it a failed `curl` falls through to the final `grep`,
-  whose `|| echo` branch exits 0 — `sbx` reports a green install for a sandbox with no hooks at all.
-- **`NODE_EXTRA_CA_CERTS`.** See the CA section above.
+- `user: "1000"` **on the install step.** Install defaults to root; as root the installer writes
+hooks to `/root/.claude/` and the agent never loads them.
+- `set -eu` **in the install step.** Without it a failed `curl` falls through to the final `grep`,
+whose `|| echo` branch exits 0 — `sbx` reports a green install for a sandbox with no hooks at all.
+- `NODE_EXTRA_CA_CERTS`**.** See the CA section above.
 
 The CA step is intentionally non-fatal while the credential preflight is intentionally fatal. That
 asymmetry is deliberate: a missing CA isn't necessarily an error (plenty of networks don't intercept
@@ -350,6 +367,8 @@ gets gated up front.
 
 ---
 
+
+
 ## Further reading
 
 - **[Snyk ADS Sandbox Kit — How-To Guide](./docs/Snyk_ADS_Sandbox_Kit_-_How-To_Guide.pdf)** ([.docx](./docs/Snyk_ADS_Sandbox_Kit_-_How-To_Guide.docx)) — the full walkthrough, including the 1Password setup and the security-model reasoning
@@ -357,3 +376,4 @@ gets gated up front.
 - [Docker Sandboxes — kit spec reference](https://docs.docker.com/ai/sandboxes/customize/kits/)
 - [Docker Sandboxes — managing credentials](https://docs.docker.com/ai/sandboxes/configuration/credentials/)
 - [Docker Sandboxes — authentication workflows](https://docs.docker.com/ai/sandboxes/workflows/authentication/)
+
