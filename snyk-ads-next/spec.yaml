@@ -1,0 +1,351 @@
+schemaVersion: "2"
+kind: mixin
+name: snyk-ads-next
+displayName: Snyk ADS (next)
+requires:
+  agent: claude
+
+# ---------------------------------------------------------------------------
+# PROPOSED / OPT-IN. The supported kit is ../snyk-ads/. This one is identical
+# to it except for two additions from Ramon Lopez Narvaez's proposal:
+#
+#   1. Dynamic per-sandbox machine identity, from SANDBOX_NAME + SANDBOX_ID.
+#   2. A `setup.startup` hook that re-runs the agent-scan inventory on every
+#      sandbox start, not just at creation.
+#
+# REQUIRES sbx >= 0.39.0 (../snyk-ads/ needs only 0.38.0). SANDBOX_NAME and
+# SANDBOX_ID were added in 0.39.0: "Sandboxes now expose their own identity as
+# SANDBOX_NAME and SANDBOX_ID environment variables, matching the name and id
+# shown by `sbx ls --json`; the older SANDBOX_VM_ID still carries the sandbox
+# name but is deprecated."
+#
+# UNVERIFIED — READ BEFORE RUNNING. Two things in here have not been confirmed
+# against a real installer, and both are marked again at the point of use:
+#   (a) whether the ADS installer reads MACHINE_ID from the environment or
+#       requires a --machine-id flag;
+#   (b) the exact agent-scan subcommand and flags.
+# See ./README.md section "What still needs verifying".
+# ---------------------------------------------------------------------------
+
+environment:
+  variables:
+    SNYK_TENANT_ID: "$SNYK_TENANT_ID"
+    SNYK_ADS_PUSH_KEY: "$SNYK_ADS_PUSH_KEY"
+    # curl reads the system trust bundle, but Node does NOT — it ships its own
+    # CA list. The ADS installer touches npm, so without this its npm step fails
+    # TLS behind Zscaler even when the curl worked. NODE_EXTRA_CA_CERTS *appends*
+    # to Node's builtin roots (unlike SSL_CERT_FILE, which replaces the bundle),
+    # so this is additive and safe.
+    NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt"
+    USER: "$SANDBOX_USER"
+
+    # MACHINE_ID is deliberately NOT set here.
+    #
+    # environment.variables interpolates from the HOST shell at create time.
+    # SANDBOX_NAME and SANDBOX_ID are injected by the daemon INSIDE the sandbox
+    # and do not exist on the host, so "$SANDBOX_ID" would expand to empty and
+    # every sandbox would report the same blank id — which is the exact failure
+    # (all sandboxes collapsing to one row) that made the original kit comment
+    # MACHINE_ID out in the first place.
+    #
+    # It is composed inside the install command below instead, where those two
+    # variables actually exist.
+
+permissions:
+  network:
+    allow:
+      - downloads.snyk.io
+      - api.snyk.io
+      - evo.snyk.io
+      - app.snyk.io
+      - registry.npmjs.org
+
+setup:
+  install:
+    # -----------------------------------------------------------------------
+    # UNCHANGED FROM ../snyk-ads/ — corp CA staging.
+    # -----------------------------------------------------------------------
+    # Runs as root because /usr/local/share/ca-certificates is root-owned.
+    #
+    # Ship the cert in the kit directory at
+    #   ./snyk-ads-next/files/home/corp-ca/<name>.crt
+    # which sbx materialises at /home/agent/corp-ca/<name>.crt inside the VM
+    # BEFORE install commands run.
+    #
+    # NON-FATAL BY DESIGN. A missing corp CA is not automatically an error —
+    # plenty of environments do not intercept TLS at all. If the cert really was
+    # needed, the install step below fails with curl exit 60/77 and says so.
+    # Keeping this fatal only guarantees you can never get inside the VM to find
+    # out which failure you actually have.
+    - description: "Install corporate root CA certificate(s) into the system trust store"
+      user: "0"
+      command: |
+        set -e
+        found=0
+        for src in /home/agent/corp-ca/*.crt; do
+          [ -e "$src" ] || continue
+          install -m 0644 "$src" "/usr/local/share/ca-certificates/$(basename "$src")"
+          echo "corp-ca: staged $(basename "$src")"
+          found=$((found + 1))
+        done
+        if [ "$found" = 0 ]; then
+          echo "corp-ca: WARNING no .crt files found under /home/agent/corp-ca/." >&2
+          echo "corp-ca: continuing without a corporate root CA. If outbound TLS is" >&2
+          echo "corp-ca: intercepted, the Snyk ADS install below will fail with curl" >&2
+          echo "corp-ca: exit 60/77 — that is your signal to ship the cert at" >&2
+          echo "corp-ca: files/home/corp-ca/<name>.crt (PEM content, .crt extension)." >&2
+          exit 0
+        fi
+        update-ca-certificates
+        echo "corp-ca: installed $found certificate(s) into the system trust store"
+
+    - description: "Verify the trust store accepts an intercepted TLS connection"
+      user: "1000"
+      command: |
+        # Non-fatal: this kit's job is trust, not reachability, and the probe host
+        # may legitimately be blocked by network policy. Prints the curl exit code
+        # so a TLS failure can be told apart from an egress-policy failure.
+        if curl -fsS -I --max-time 20 -o /dev/null https://downloads.snyk.io/ 2>/dev/null; then
+          echo "corp-ca: outbound TLS verified"
+        else
+          rc=$?
+          echo "corp-ca: outbound TLS probe failed (curl exit $rc)" >&2
+          echo "corp-ca:   60/77 => TLS trust problem: ship the ROOT CA in PEM form." >&2
+          echo "corp-ca:    6/7  => egress blocked, not a cert problem. Under org" >&2
+          echo "corp-ca:            governance, kit allow rules are IGNORED." >&2
+          echo "corp-ca: diagnose with: openssl s_client -connect downloads.snyk.io:443 -showcerts" >&2
+        fi
+
+    # Deliberately absent: any attempt to set SSL_CERT_FILE, REQUESTS_CA_BUNDLE
+    # or PIP_CERT. Docker's troubleshooting guide is explicit: "Don't override the
+    # sandbox's TLS trust variables (such as SSL_CERT_FILE) to point at only your
+    # internal CA. Doing so replaces the system bundle and breaks the trust the
+    # credential proxy depends on." Adding to the system bundle with
+    # update-ca-certificates is additive and safe; repointing those is not.
+
+    # -----------------------------------------------------------------------
+    # UNCHANGED FROM ../snyk-ads/ — credential preflight.
+    # -----------------------------------------------------------------------
+    # Fail fast if either credential is missing or malformed.
+    - description: "Validate Snyk credentials"
+      user: "1000"
+      command: |
+        fail=0
+
+        # --- SNYK_TENANT_ID -------------------------------------------------
+        if [ -z "${SNYK_TENANT_ID:-}" ]; then
+          echo "snyk-ads: ERROR SNYK_TENANT_ID is not set." >&2
+          echo "  Find your tenant ID in the Snyk console under Settings > General," >&2
+          echo "  then export it before creating the sandbox:" >&2
+          echo "    export SNYK_TENANT_ID=<uuid>" >&2
+          fail=1
+        elif ! printf '%s' "$SNYK_TENANT_ID" | grep -Eqi '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+          echo "snyk-ads: ERROR SNYK_TENANT_ID is not a valid tenant ID." >&2
+          echo "  Expected a UUID (8-4-4-4-12 hex), got: '$SNYK_TENANT_ID'" >&2
+          echo "  Copy the value from the Snyk console under Settings > General." >&2
+          fail=1
+        fi
+
+        # --- SNYK_ADS_PUSH_KEY ----------------------------------------------
+        if [ -z "${SNYK_ADS_PUSH_KEY:-}" ]; then
+          echo "snyk-ads: ERROR SNYK_ADS_PUSH_KEY is not set or could not be read." >&2
+          echo "  This secret is expected to come from 1Password. Please:" >&2
+          echo "    1. Sign in to the 1Password CLI:  op signin" >&2
+          echo "    2. Confirm the secret resolves:   op read <op://vault/item/field>" >&2
+          echo "    3. Export it and retry:           export SNYK_ADS_PUSH_KEY=\$(op read <op://vault/item/field>)" >&2
+          echo "  If 'op read' fails, check that the item is shared with your account" >&2
+          echo "  and that your CLI session has not expired." >&2
+          fail=1
+        fi
+
+        if [ "$fail" -ne 0 ]; then
+          echo "snyk-ads: aborting — sandbox not created until the above is fixed." >&2
+          exit 1
+        fi
+
+        echo "snyk-ads: credentials OK"
+
+    # -----------------------------------------------------------------------
+    # NEW — sbx version gate for the machine-identity feature.
+    # -----------------------------------------------------------------------
+    # NON-FATAL. A sandbox on 0.38.x still installs and still reports; it just
+    # falls back to the old undifferentiated machine identity. Failing the
+    # create here would be a worse outcome than degrading.
+    - description: "Check sandbox identity variables are available (sbx >= 0.39.0)"
+      user: "1000"
+      command: |
+        if [ -n "${SANDBOX_ID:-}" ] && [ -n "${SANDBOX_NAME:-}" ]; then
+          echo "snyk-ads: sandbox identity OK (name=${SANDBOX_NAME} id=${SANDBOX_ID})"
+        else
+          echo "snyk-ads: WARNING SANDBOX_NAME/SANDBOX_ID not present." >&2
+          echo "  These landed in sbx 0.39.0. On an older sbx this kit still installs," >&2
+          echo "  but every sandbox reports the same machine identity and the console" >&2
+          echo "  Machines tab collapses them into one row." >&2
+          echo "  Check your version with: sbx version" >&2
+          echo "  Or use the supported kit instead: --kit ./snyk-ads" >&2
+        fi
+
+    # -----------------------------------------------------------------------
+    # MODIFIED — ADS install, now with a per-sandbox machine identity.
+    # -----------------------------------------------------------------------
+    # user 1000 is required: install defaults to root, and as root the installer
+    # writes hooks to /root/.claude/ instead of /home/agent/.claude/
+    #
+    # set -eu is REQUIRED. Without it a failed curl falls through to the final
+    # grep, whose `|| echo` branch exits 0 — so sbx reports a green install for a
+    # sandbox with no hooks at all. Do not reintroduce that by removing set -eu
+    # or restoring the `||`.
+    - description: "Install Snyk ADS"
+      user: "1000"
+      command: |
+        set -eu
+        unset NPM_CONFIG_PREFIX
+
+        # --- machine identity ----------------------------------------------
+        # Composed HERE, not in environment.variables, because SANDBOX_NAME and
+        # SANDBOX_ID only exist inside the sandbox. Falls back to the hostname
+        # on sbx < 0.39.0 so this degrades instead of exporting an empty id.
+        if [ -n "${SANDBOX_ID:-}" ] && [ -n "${SANDBOX_NAME:-}" ]; then
+          MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
+        else
+          MACHINE_ID="docker-sbx:$(hostname):unknown"
+        fi
+        export MACHINE_ID
+        echo "snyk-ads: machine id ${MACHINE_ID}"
+
+        # The installer is published per-architecture. Hardcoding arm64 fails
+        # with "Exec format error" or a 404 on an amd64 VM.
+        case "$(uname -m)" in
+          aarch64|arm64) ads_arch=arm64 ;;
+          x86_64|amd64)  ads_arch=amd64 ;;
+          *) echo "snyk-ads: ERROR unsupported architecture $(uname -m)" >&2; exit 1 ;;
+        esac
+        echo "snyk-ads: installing for linux-${ads_arch}"
+
+        if ! curl -fsSL --max-time 120 \
+             "https://downloads.snyk.io/ads/installer/latest/ads-installer-linux-${ads_arch}" \
+             -o /tmp/ads-installer; then
+          rc=$?
+          echo "snyk-ads: ERROR installer download failed (curl exit $rc)." >&2
+          echo "  60/77 => TLS trust: ship your corp root CA at files/home/corp-ca/<name>.crt" >&2
+          echo "   6/7  => egress blocked. Under organization governance, kit-level allow" >&2
+          echo "           rules are IGNORED — downloads.snyk.io must be allowed centrally." >&2
+          echo "           Check with: sbx policy ls" >&2
+          echo "   22   => HTTP error from downloads.snyk.io (wrong arch path?)" >&2
+          exit 1
+        fi
+
+        [ -s /tmp/ads-installer ] || {
+          echo "snyk-ads: ERROR downloaded installer is empty." >&2; exit 1; }
+
+        chmod +x /tmp/ads-installer
+
+        # UNVERIFIED (a): MACHINE_ID is exported above on the assumption that the
+        # installer reads it from the environment — which is how the original
+        # kit's commented-out `MACHINE_ID:` line implied it works. Ramon's
+        # proposal also shows a `--machine-id` flag form. If the installer turns
+        # out to require the flag, add it here:
+        #
+        #   /tmp/ads-installer --tenant-id "$SNYK_TENANT_ID" \
+        #                      --push-key "$SNYK_ADS_PUSH_KEY" \
+        #                      --machine-id "$MACHINE_ID"
+        #
+        # Do NOT add it speculatively — an unrecognised flag aborts the install.
+        # Confirm with: /tmp/ads-installer --help
+        /tmp/ads-installer --tenant-id "$SNYK_TENANT_ID" --push-key "$SNYK_ADS_PUSH_KEY"
+        rm -f /tmp/ads-installer
+
+        if grep -qi snyk "$HOME/.claude/settings.json"; then
+          echo "snyk-ads: hooks OK"
+        else
+          echo "snyk-ads: ERROR installer reported success but wrote no hooks to" >&2
+          echo "  $HOME/.claude/settings.json — refusing to create a sandbox that" >&2
+          echo "  silently reports nothing to Snyk Evo." >&2
+          exit 1
+        fi
+
+        # Record the identity for the startup hook to reuse, so both steps agree
+        # on the same value rather than recomputing it independently.
+        mkdir -p "$HOME/.snyk"
+        printf '%s\n' "$MACHINE_ID" > "$HOME/.snyk/machine-id"
+
+  # -------------------------------------------------------------------------
+  # NEW — re-run the agent-scan inventory on every sandbox start.
+  # -------------------------------------------------------------------------
+  # setup.install runs ONCE at creation. Without this, the MCP-server and skill
+  # inventory is a single snapshot taken at create time: restart the sandbox, or
+  # add an MCP server mid-life, and nothing re-reports.
+  #
+  # Docker's kit reference: "Startup commands are for work that can run
+  # alongside the agent... They must be idempotent." It also warns that startup
+  # commands "don't gate the agent entrypoint" — which is why only the inventory
+  # push lives here. The ADS hook install must stay in setup.install; moving it
+  # here would race the agent's own startup.
+  startup:
+    - description: "Upload Snyk agent-scan inventory"
+      user: "1000"
+      background: true
+      command:
+        - bash
+        - -lc
+        - |
+          # NEVER fail the boot. A broken inventory push is worth a log line,
+          # not an unusable sandbox. Every path below ends exit 0.
+          LOGDIR="$HOME/.snyk"
+          LOG="$LOGDIR/agent-scan-startup.log"
+          mkdir -p "$LOGDIR"
+          exec >>"$LOG" 2>&1
+          echo "===== $(date -Is) startup ====="
+
+          if [ -z "${SNYK_ADS_PUSH_KEY:-}" ]; then
+            echo "agent-scan: SKIP push key not present in startup environment."
+            echo "  Kit environment.variables should carry it through; if this"
+            echo "  recurs, the value was not exported at create time."
+            exit 0
+          fi
+
+          # Resolve the binary. Ramon's sketch assumed it is on PATH; the
+          # verified install actually puts the ADS binaries in ~/.ads-scan/bin/.
+          # Try the known location first, then PATH, then give up quietly.
+          SCAN=""
+          for cand in "$HOME/.ads-scan/bin/snyk-scan" \
+                      "$HOME/.ads-scan/bin/snyk-agent-scan"; do
+            [ -x "$cand" ] && { SCAN="$cand"; break; }
+          done
+          [ -n "$SCAN" ] || SCAN="$(command -v snyk-agent-scan 2>/dev/null || true)"
+          [ -n "$SCAN" ] || SCAN="$(command -v snyk-scan 2>/dev/null || true)"
+
+          if [ -z "$SCAN" ]; then
+            echo "agent-scan: SKIP no scan binary found."
+            echo "  Looked in ~/.ads-scan/bin/ and on PATH. Either the install"
+            echo "  step did not complete, or the binary name has changed."
+            ls -la "$HOME/.ads-scan/bin/" 2>&1 || echo "  (~/.ads-scan/bin does not exist)"
+            exit 0
+          fi
+          echo "agent-scan: using $SCAN"
+
+          # Reuse the identity the install step recorded, so a restart reports
+          # under the same machine as the original create.
+          if [ -r "$HOME/.snyk/machine-id" ]; then
+            MACHINE_ID="$(cat "$HOME/.snyk/machine-id")"
+          elif [ -n "${SANDBOX_ID:-}" ] && [ -n "${SANDBOX_NAME:-}" ]; then
+            MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
+          else
+            MACHINE_ID="docker-sbx:$(hostname):unknown"
+          fi
+          echo "agent-scan: machine id $MACHINE_ID"
+
+          # flock -n makes this idempotent under concurrent starts: if a scan is
+          # already running, this one exits rather than stacking a second.
+          #
+          # UNVERIFIED (b): subcommand and flag names below are taken from
+          # Ramon's proposal and have not been confirmed against the shipped
+          # binary. Check with: "$SCAN" --help
+          flock -n "$LOGDIR/agent-scan.lock" \
+            "$SCAN" scan \
+              --machine-id "$MACHINE_ID" \
+              --push-key "$SNYK_ADS_PUSH_KEY" \
+            || echo "agent-scan: exited non-zero (rc=$?) — see above, boot unaffected"
+
+          echo "agent-scan: done $(date -Is)"
+          exit 0

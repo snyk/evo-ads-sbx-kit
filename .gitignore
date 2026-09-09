@@ -6,8 +6,8 @@
 #
 #   git add -f snyk-ads/files/home/corp-ca/zscaler-root-ca.crt
 #
-snyk-ads/files/home/corp-ca/*.crt
-!snyk-ads/files/home/corp-ca/*.crt.example
+**/files/home/corp-ca/*.crt
+!**/files/home/corp-ca/*.crt.example
 
 # Never commit these. The ADS push key is a live credential.
 .env

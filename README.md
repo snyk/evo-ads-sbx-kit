@@ -1,5 +1,28 @@
 # Snyk ADS Sandbox Kit
 
+> ## ⚠️ Experimental
+>
+> **Snyk Evo was not designed for Docker Sandboxes.** It was built for developer workstations and
+> CI runners — long-lived machines with a stable identity and a known owner. Sandboxes are
+> ephemeral, disposable and anonymous by default, which is close to the opposite.
+>
+> Most of it works anyway. The guard hooks install cleanly, the sandbox registers, and agent
+> activity lands in the Evo console. What's rough is everything downstream of *machine identity*,
+> because that's the assumption sandboxes break:
+>
+> - **The Machines tab fills up.** Sandboxes spin up and die; nothing expires them. At any real
+>   scale the view degrades fast.
+> - **Attribution is manual.** Nothing maps a sandbox back to the person who launched it unless
+>   you pass it yourself — see `SANDBOX_USER` in [Quick start](#quick-start).
+> - **Agent-scan inventory is a snapshot.** It runs once at creation, so MCP servers and skills
+>   added mid-session aren't picked up. [`snyk-ads-next/`](./snyk-ads-next/) is an opt-in attempt
+>   at fixing this and the point above.
+>
+> These are gaps in Evo rather than bugs in the kit, and they're open questions we're working
+> through — no committed fix or timeline. Nothing here is a supported Snyk product: no SLA, no
+> support ticket path. Raise problems as issues on this repo. Treat it as a working integration
+> to evaluate and demo — not something to point production governance at yet.
+
 A [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) kit (`kind: mixin`) that installs
 **Snyk ADS** — the Agent Detection & Response guard hooks — into a Claude sandbox, so every tool
 call, shell execution and file write the agent makes is reported to the Snyk Evo control plane.
@@ -33,6 +56,10 @@ evo-ads-docker-sandbox-kit/
 │               ├── README.md                  ← how to export and validate your cert
 │               ├── example-root-ca.crt.example ← expected PEM shape (ignored by the glob)
 │               └── <your-root-ca>.crt         ← you add this; see below
+├── snyk-ads-next/                             ← proposed, opt-in. Not the supported kit.
+│   ├── README.md                              ← what it adds and why
+│   ├── spec.yaml
+│   └── files/home/corp-ca/                    ← same staging as above
 └── docs/
     ├── Snyk_ADS_Sandbox_Kit_-_How-To_Guide.pdf
     └── Snyk_ADS_Sandbox_Kit_-_How-To_Guide.docx
@@ -52,6 +79,26 @@ Non-`.crt` files in that directory — the two placeholders — are ignored and 
 
 To vendor the kit inside another project, copy the whole `snyk-ads/` directory across. The
 `docs/` folder and this README are not part of the kit.
+
+### Two kits, and which to use
+
+**`snyk-ads/` is the supported one.** Use it unless you have a reason not to.
+
+`snyk-ads-next/` is an opt-in proposal that adds per-sandbox machine identity (from
+`SANDBOX_NAME` + `SANDBOX_ID`, new in sbx 0.39.0) and a `startup` hook that re-runs the
+agent-scan inventory on every sandbox start rather than only at creation. It exists so those two
+changes can be reviewed as a working spec rather than as a diff in a thread.
+
+| | `snyk-ads/` | `snyk-ads-next/` |
+| --- | --- | --- |
+| Status | Supported | Proposed, opt-in |
+| Minimum `sbx` | 0.38.0 | **0.39.0** |
+| Machine identity | One shared identity — all sandboxes collapse to a single console row | Unique per sandbox |
+| Inventory refresh | Once, at creation | Every sandbox start |
+| Unverified assumptions | None | Two, both flagged in its README |
+
+Full rationale, the fixes applied to the original proposal, and what still needs confirming
+against a shipped binary: [`snyk-ads-next/README.md`](./snyk-ads-next/README.md).
 
 ---
 
@@ -160,14 +207,36 @@ set -o pipefail
 export SNYK_ADS_PUSH_KEY="$(op read 'op://Engineering/Snyk ADS/credential')"
 
 # 2. launch
-sbx run claude --kit ./snyk-ads \
-  -e SNYK_TENANT_ID=a1657f9b-xxxx-xxxx-xxxx-xxxxxxxx264d \
-  -e SNYK_ADS_PUSH_KEY
+sbx run claude --kit ./snyk-ads --name $(hostname)-sandbox \
+  -e SNYK_TENANT_ID=5de58927-xxxx-xxxx-xxxx-xxxxxxxxf6fe \
+  -e SNYK_ADS_PUSH_KEY \
+  -e SANDBOX_USER=$(whoami)
 ```
 
-`-e SNYK_ADS_PUSH_KEY` has **no `=value`**. A bare name tells `sbx` to lift the value out of your
-current environment, keeping the secret out of shell history and out of `ps` argv. Don't "fix" it
-by adding the literal.
+Four lines, four reasons:
+
+| | Why |
+| --- | --- |
+| `--name $(hostname)-sandbox` | The Evo console identifies machines by hostname. Without a name you get an `sbx`-generated one and you're guessing which row is yours in **Agent Behavior → Machines**. Deriving it from your hostname makes the sandbox traceable back to the laptop that launched it. |
+| `-e SNYK_TENANT_ID=<uuid>` | A literal is fine here — the tenant ID is an identifier, not a secret. Preflight rejects anything that isn't a UUID. |
+| `-e SNYK_ADS_PUSH_KEY` | **No `=value`.** A bare name tells `sbx` to lift the value out of your current environment, keeping the secret out of shell history and out of `ps` argv. Don't "fix" it by adding the literal. |
+| `-e SANDBOX_USER=$(whoami)` | The spec maps this to `USER` inside the VM. Without it, activity attributes to the sandbox's default `agent` user and every engineer's sessions look identical in the console. |
+
+> **The tenant ID above is masked.** Replace it with your own full UUID from
+> Evo → Settings → General. The value as written will fail preflight — deliberately, so a
+> copy-paste can't silently point your activity at someone else's tenant.
+
+### On identity and attribution
+
+`--name` and `SANDBOX_USER` are the two things that make console output readable when more than
+one person is running the kit. Neither affects whether the install works, which is why they're
+easy to skip and then regret.
+
+The spec also has `MACHINE_ID` commented out on purpose — setting it **collapses every sandbox
+into a single row** in the console. Leave it commented unless that's genuinely what you want.
+
+`LOGNAME` is likewise commented out alongside `USER`. Some tooling reads one and some the other;
+uncomment it if attribution still looks wrong after setting `SANDBOX_USER`.
 
 `--kit` is creation-time only. To attach the kit to a sandbox that's already running:
 
@@ -201,8 +270,13 @@ ls ~/.snyk-studio/             # device-id, cli-path, ades/
 grep -i snyk ~/.claude/settings.json
 ```
 
-And in the console: **Agent Behavior → Machines**, find your sandbox by hostname. Activity should
-appear within a minute or two of the agent doing anything.
+And in the console: **Agent Behavior → Machines**, find your sandbox by the name you passed to
+`--name`. Activity should appear within a minute or two of the agent doing anything. Drilling into
+a session shows the files written, domains reached and prompts that drove it — the **Files Written**
+panel is the one worth watching.
+
+If the row is there but attributed to `agent` rather than you, you launched without
+`-e SANDBOX_USER=$(whoami)`.
 
 > `snyk` not being on `PATH` is expected. The ADS guard hooks and the interactive Snyk CLI
 > (`snyk_code_scan`, `snyk_sca_scan`) authenticate separately. Run `snyk auth` inside the sandbox
@@ -245,6 +319,9 @@ The kit allows five domains and nothing else:
 | Install succeeds, no hooks in settings | Install ran as root, hooks went to `/root/.claude/`. | Already handled by `user: "1000"`. Don't remove it. |
 | `--kit can only be used when creating a new sandbox` | It's a creation-time flag. | `sbx kit add <sandbox> ./snyk-ads/` |
 | Clean install, console stays empty | Key is well-formed but wrong, revoked, or from another tenant. Preflight checks shape, not authorisation. | Re-mint the push key and confirm it matches the tenant ID. |
+| Can't tell which console row is your sandbox | Launched without `--name`, so `sbx` generated one. | `--name $(hostname)-sandbox` at create time. Not changeable afterwards. |
+| Sessions attributed to `agent`, not you | `SANDBOX_USER` wasn't passed. | `-e SANDBOX_USER=$(whoami)`. If it persists, uncomment `LOGNAME` in the spec. |
+| Every sandbox shows as one row in the console | `MACHINE_ID` is set. | Leave it commented out in the spec — setting it collapses all sandboxes together. |
 
 ### When the create won't come up at all
 
