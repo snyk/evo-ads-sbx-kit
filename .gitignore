@@ -1,0 +1,29 @@
+# Corporate root CA certs are gitignored by default.
+#
+# A root CA is a public key, not a secret, so committing one to share with your
+# team is usually fine — but that should be a deliberate act, not an accident.
+# To commit yours:
+#
+#   git add -f snyk-ads/files/home/corp-ca/zscaler-root-ca.crt
+#
+snyk-ads/files/home/corp-ca/*.crt
+!snyk-ads/files/home/corp-ca/*.crt.example
+
+# Never commit these. The ADS push key is a live credential.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Local scratch
+*.bak
+*.bak.yaml
+*.log
