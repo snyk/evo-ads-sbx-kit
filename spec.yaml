@@ -1,0 +1,178 @@
+schemaVersion: "2"
+kind: mixin
+name: snyk-ads
+requires:
+  agent: claude
+
+environment:
+  variables:
+    SNYK_TENANT_ID: "$SNYK_TENANT_ID"
+    SNYK_ADS_PUSH_KEY: "$SNYK_ADS_PUSH_KEY"
+    # curl reads the system trust bundle, but Node does NOT — it ships its own
+    # CA list. The ADS installer touches npm, so without this its npm step fails
+    # TLS behind Zscaler even when the curl worked. NODE_EXTRA_CA_CERTS *appends*
+    # to Node's builtin roots (unlike SSL_CERT_FILE, which replaces the bundle),
+    # so this is additive and safe.
+    NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt"
+    # MACHINE_ID: "$MACHINE_ID"        # collapses all sandboxes to one row
+    USER: "$SANDBOX_USER"            # see caveat below
+    # LOGNAME: "$SANDBOX_USER"
+
+permissions:
+  network:
+    allow:
+      - downloads.snyk.io
+      - api.snyk.io
+      - evo.snyk.io
+      - app.snyk.io
+      - registry.npmjs.org
+
+setup:
+  install:
+    # Runs as root because /usr/local/share/ca-certificates is root-owned.
+    #
+    # Ship the cert in the kit directory at
+    #   ./snyk-ads/files/home/corp-ca/<name>.crt
+    # which sbx materialises at /home/agent/corp-ca/<name>.crt inside the VM
+    # BEFORE install commands run. Requires sbx >= 0.38.0.
+    #
+    # NON-FATAL BY DESIGN. A missing corp CA is not automatically an error —
+    # plenty of environments do not intercept TLS at all. If the cert really was
+    # needed, the install step below fails with curl exit 60/77 and says so.
+    # Keeping this fatal only guarantees you can never get inside the VM to find
+    # out which failure you actually have.
+    - description: "Install corporate root CA certificate(s) into the system trust store"
+      user: "0"
+      command: |
+        set -e
+        found=0
+        for src in /home/agent/corp-ca/*.crt; do
+          [ -e "$src" ] || continue
+          install -m 0644 "$src" "/usr/local/share/ca-certificates/$(basename "$src")"
+          echo "corp-ca: staged $(basename "$src")"
+          found=$((found + 1))
+        done
+        if [ "$found" = 0 ]; then
+          echo "corp-ca: WARNING no .crt files found under /home/agent/corp-ca/." >&2
+          echo "corp-ca: continuing without a corporate root CA. If outbound TLS is" >&2
+          echo "corp-ca: intercepted, the Snyk ADS install below will fail with curl" >&2
+          echo "corp-ca: exit 60/77 — that is your signal to ship the cert at" >&2
+          echo "corp-ca: files/home/corp-ca/<name>.crt (PEM content, .crt extension)." >&2
+          exit 0
+        fi
+        update-ca-certificates
+        echo "corp-ca: installed $found certificate(s) into the system trust store"
+
+    - description: "Verify the trust store accepts an intercepted TLS connection"
+      user: "1000"
+      command: |
+        # Non-fatal: this kit's job is trust, not reachability, and the probe host
+        # may legitimately be blocked by network policy. Prints the curl exit code
+        # so a TLS failure can be told apart from an egress-policy failure.
+        if curl -fsS -I --max-time 20 -o /dev/null https://downloads.snyk.io/ 2>/dev/null; then
+          echo "corp-ca: outbound TLS verified"
+        else
+          rc=$?
+          echo "corp-ca: outbound TLS probe failed (curl exit $rc)" >&2
+          echo "corp-ca:   60/77 => TLS trust problem: ship the ROOT CA in PEM form." >&2
+          echo "corp-ca:    6/7  => egress blocked, not a cert problem. Under org" >&2
+          echo "corp-ca:            governance, kit allow rules are IGNORED." >&2
+          echo "corp-ca: diagnose with: openssl s_client -connect downloads.snyk.io:443 -showcerts" >&2
+        fi
+
+    # Deliberately absent: any attempt to set SSL_CERT_FILE, REQUESTS_CA_BUNDLE
+    # or PIP_CERT. Docker's troubleshooting guide is explicit: "Don't override the
+    # sandbox's TLS trust variables (such as SSL_CERT_FILE) to point at only your
+    # internal CA. Doing so replaces the system bundle and breaks the trust the
+    # credential proxy depends on." Adding to the system bundle with
+    # update-ca-certificates is additive and safe; repointing those is not.
+
+    # Preflight: fail fast if either credential is missing or malformed.
+    - description: "Validate Snyk credentials"
+      user: "1000"
+      command: |
+        fail=0
+
+        # --- SNYK_TENANT_ID -------------------------------------------------
+        if [ -z "${SNYK_TENANT_ID:-}" ]; then
+          echo "snyk-ads: ERROR SNYK_TENANT_ID is not set." >&2
+          echo "  Find your tenant ID in the Snyk console under Settings > General," >&2
+          echo "  then export it before creating the sandbox:" >&2
+          echo "    export SNYK_TENANT_ID=<uuid>" >&2
+          fail=1
+        elif ! printf '%s' "$SNYK_TENANT_ID" | grep -Eqi '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+          echo "snyk-ads: ERROR SNYK_TENANT_ID is not a valid tenant ID." >&2
+          echo "  Expected a UUID (8-4-4-4-12 hex), got: '$SNYK_TENANT_ID'" >&2
+          echo "  Copy the value from the Snyk console under Settings > General." >&2
+          fail=1
+        fi
+
+        # --- SNYK_ADS_PUSH_KEY ----------------------------------------------
+        if [ -z "${SNYK_ADS_PUSH_KEY:-}" ]; then
+          echo "snyk-ads: ERROR SNYK_ADS_PUSH_KEY is not set or could not be read." >&2
+          echo "  This secret is expected to come from 1Password. Please:" >&2
+          echo "    1. Sign in to the 1Password CLI:  op signin" >&2
+          echo "    2. Confirm the secret resolves:   op read <op://vault/item/field>" >&2
+          echo "    3. Export it and retry:           export SNYK_ADS_PUSH_KEY=\$(op read <op://vault/item/field>)" >&2
+          echo "  If 'op read' fails, check that the item is shared with your account" >&2
+          echo "  and that your CLI session has not expired." >&2
+          fail=1
+        fi
+
+        if [ "$fail" -ne 0 ]; then
+          echo "snyk-ads: aborting — sandbox not created until the above is fixed." >&2
+          exit 1
+        fi
+
+        echo "snyk-ads: credentials OK"
+
+    # user 1000 is required: install defaults to root, and as root the installer
+    # writes hooks to /root/.claude/ instead of /home/agent/.claude/
+    #
+    # set -eu is REQUIRED. Without it a failed curl falls through to the final
+    # grep, whose `|| echo` branch exits 0 — so sbx reports a green install for a
+    # sandbox with no hooks at all. Do not reintroduce that by removing set -eu
+    # or restoring the `||`.
+    - description: "Install Snyk ADS"
+      user: "1000"
+      command: |
+        set -eu
+        unset NPM_CONFIG_PREFIX
+
+        # The installer is published per-architecture. Hardcoding arm64 fails
+        # with "Exec format error" or a 404 on an amd64 VM.
+        case "$(uname -m)" in
+          aarch64|arm64) ads_arch=arm64 ;;
+          x86_64|amd64)  ads_arch=amd64 ;;
+          *) echo "snyk-ads: ERROR unsupported architecture $(uname -m)" >&2; exit 1 ;;
+        esac
+        echo "snyk-ads: installing for linux-${ads_arch}"
+
+        if ! curl -fsSL --max-time 120 \
+             "https://downloads.snyk.io/ads/installer/latest/ads-installer-linux-${ads_arch}" \
+             -o /tmp/ads-installer; then
+          rc=$?
+          echo "snyk-ads: ERROR installer download failed (curl exit $rc)." >&2
+          echo "  60/77 => TLS trust: ship your corp root CA at files/home/corp-ca/<name>.crt" >&2
+          echo "   6/7  => egress blocked. Under organization governance, kit-level allow" >&2
+          echo "           rules are IGNORED — downloads.snyk.io must be allowed centrally." >&2
+          echo "           Check with: sbx policy ls" >&2
+          echo "   22   => HTTP error from downloads.snyk.io (wrong arch path?)" >&2
+          exit 1
+        fi
+
+        [ -s /tmp/ads-installer ] || {
+          echo "snyk-ads: ERROR downloaded installer is empty." >&2; exit 1; }
+
+        chmod +x /tmp/ads-installer
+        /tmp/ads-installer --tenant-id "$SNYK_TENANT_ID" --push-key "$SNYK_ADS_PUSH_KEY"
+        rm -f /tmp/ads-installer
+
+        if grep -qi snyk "$HOME/.claude/settings.json"; then
+          echo "snyk-ads: hooks OK"
+        else
+          echo "snyk-ads: ERROR installer reported success but wrote no hooks to" >&2
+          echo "  $HOME/.claude/settings.json — refusing to create a sandbox that" >&2
+          echo "  silently reports nothing to Snyk Evo." >&2
+          exit 1
+        fi
