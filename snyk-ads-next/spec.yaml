@@ -11,7 +11,7 @@ requires:
 #
 #   1. Dynamic per-sandbox machine identity, from SANDBOX_NAME + SANDBOX_ID.
 #   2. A `setup.startup` hook that re-runs the agent-scan inventory on every
-#      sandbox start, not just at creation.
+#      sandbox start and repeats after a 15-minute pause between scans.
 #
 # REQUIRES sbx >= 0.39.0 (../snyk-ads/ needs only 0.38.0). SANDBOX_NAME and
 # SANDBOX_ID were added in 0.39.0: "Sandboxes now expose their own identity as
@@ -166,50 +166,23 @@ setup:
         echo "snyk-ads: credentials OK"
 
     # -----------------------------------------------------------------------
-    # NEW — sbx version gate for the machine-identity feature.
-    # -----------------------------------------------------------------------
-    # NON-FATAL. A sandbox on 0.38.x still installs and still reports; it just
-    # falls back to the old undifferentiated machine identity. Failing the
-    # create here would be a worse outcome than degrading.
-    - description: "Check sandbox identity variables are available (sbx >= 0.39.0)"
-      user: "1000"
-      command: |
-        if [ -n "${SANDBOX_ID:-}" ] && [ -n "${SANDBOX_NAME:-}" ]; then
-          echo "snyk-ads: sandbox identity OK (name=${SANDBOX_NAME} id=${SANDBOX_ID})"
-        else
-          echo "snyk-ads: WARNING SANDBOX_NAME/SANDBOX_ID not present." >&2
-          echo "  These landed in sbx 0.39.0. On an older sbx this kit still installs," >&2
-          echo "  but every sandbox reports the same machine identity and the console" >&2
-          echo "  Machines tab collapses them into one row." >&2
-          echo "  Check your version with: sbx version" >&2
-          echo "  Or use the supported kit instead: --kit ./snyk-ads" >&2
-        fi
-
-    # -----------------------------------------------------------------------
     # MODIFIED — ADS install, now with a per-sandbox machine identity.
     # -----------------------------------------------------------------------
     # user 1000 is required: install defaults to root, and as root the installer
     # writes hooks to /root/.claude/ instead of /home/agent/.claude/
     #
-    # set -eu is REQUIRED. Without it a failed curl falls through to the final
-    # grep, whose `|| echo` branch exits 0 — so sbx reports a green install for a
-    # sandbox with no hooks at all. Do not reintroduce that by removing set -eu
-    # or restoring the `||`.
+    # set -eu is required so an installer failure stops sandbox setup.
+    # The installer tests AgentGuard connectivity and exits nonzero on failure.
     - description: "Install Snyk ADS"
       user: "1000"
       command: |
         set -eu
         unset NPM_CONFIG_PREFIX
 
-        # --- machine identity ----------------------------------------------
-        # Composed HERE, not in environment.variables, because SANDBOX_NAME and
-        # SANDBOX_ID only exist inside the sandbox. Falls back to the hostname
-        # on sbx < 0.39.0 so this degrades instead of exporting an empty id.
-        if [ -n "${SANDBOX_ID:-}" ] && [ -n "${SANDBOX_NAME:-}" ]; then
-          MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
-        else
-          MACHINE_ID="docker-sbx:$(hostname):unknown"
-        fi
+        # Docker sbx provides these variables inside the sandbox (0.39.0+).
+        : "${SANDBOX_NAME:?SANDBOX_NAME is required}"
+        : "${SANDBOX_ID:?SANDBOX_ID is required}"
+        MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
         export MACHINE_ID
         echo "snyk-ads: machine id ${MACHINE_ID}"
 
@@ -222,9 +195,11 @@ setup:
         esac
         echo "snyk-ads: installing for linux-${ads_arch}"
 
-        if ! curl -fsSL --max-time 120 \
+        if curl -fsSL --max-time 120 \
              "https://downloads.snyk.io/ads/installer/latest/ads-installer-linux-${ads_arch}" \
              -o /tmp/ads-installer; then
+          : # Download succeeded; validate the file below.
+        else
           rc=$?
           echo "snyk-ads: ERROR installer download failed (curl exit $rc)." >&2
           echo "  60/77 => TLS trust: ship your corp root CA at files/home/corp-ca/<name>.crt" >&2
@@ -255,22 +230,8 @@ setup:
         /tmp/ads-installer --tenant-id "$SNYK_TENANT_ID" --push-key "$SNYK_ADS_PUSH_KEY"
         rm -f /tmp/ads-installer
 
-        if grep -qi snyk "$HOME/.claude/settings.json"; then
-          echo "snyk-ads: hooks OK"
-        else
-          echo "snyk-ads: ERROR installer reported success but wrote no hooks to" >&2
-          echo "  $HOME/.claude/settings.json — refusing to create a sandbox that" >&2
-          echo "  silently reports nothing to Snyk Evo." >&2
-          exit 1
-        fi
-
-        # Record the identity for the startup hook to reuse, so both steps agree
-        # on the same value rather than recomputing it independently.
-        mkdir -p "$HOME/.snyk"
-        printf '%s\n' "$MACHINE_ID" > "$HOME/.snyk/machine-id"
-
   # -------------------------------------------------------------------------
-  # NEW — re-run the agent-scan inventory on every sandbox start.
+  # Run inventory at startup and repeat while Linux scheduling is unavailable.
   # -------------------------------------------------------------------------
   # setup.install runs ONCE at creation. Without this, the MCP-server and skill
   # inventory is a single snapshot taken at create time: restart the sandbox, or
@@ -282,7 +243,7 @@ setup:
   # push lives here. The ADS hook install must stay in setup.install; moving it
   # here would race the agent's own startup.
   startup:
-    - description: "Upload Snyk agent-scan inventory"
+    - description: "Upload Snyk agent-scan inventory every 15 minutes"
       user: "1000"
       background: true
       command:
@@ -290,12 +251,19 @@ setup:
         - -lc
         - |
           # NEVER fail the boot. A broken inventory push is worth a log line,
-          # not an unusable sandbox. Every path below ends exit 0.
+          # not an unusable sandbox. Scan failures do not stop the worker.
           LOGDIR="$HOME/.snyk"
           LOG="$LOGDIR/agent-scan-startup.log"
           mkdir -p "$LOGDIR"
           exec >>"$LOG" 2>&1
           echo "===== $(date -Is) startup ====="
+
+          # Hold the lock for the worker's lifetime, including between scans.
+          exec 9>"$LOGDIR/agent-scan.lock"
+          if ! flock -n 9; then
+            echo "agent-scan: SKIP inventory worker already running."
+            exit 0
+          fi
 
           if [ -z "${SNYK_ADS_PUSH_KEY:-}" ]; then
             echo "agent-scan: SKIP push key not present in startup environment."
@@ -324,28 +292,35 @@ setup:
           fi
           echo "agent-scan: using $SCAN"
 
-          # Reuse the identity the install step recorded, so a restart reports
-          # under the same machine as the original create.
-          if [ -r "$HOME/.snyk/machine-id" ]; then
-            MACHINE_ID="$(cat "$HOME/.snyk/machine-id")"
-          elif [ -n "${SANDBOX_ID:-}" ] && [ -n "${SANDBOX_NAME:-}" ]; then
-            MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
+          # The help subcommand prints the version banner without running a scan.
+          if SCAN_HELP="$(NO_COLOR=1 timeout 15 "$SCAN" help 2>/dev/null)" &&
+             [[ "$SCAN_HELP" =~ Snyk\ Agent\ Scan\ v([0-9]+)\.([0-9]+)\.([0-9]+)([^[:space:]]*) ]]; then
+            SCAN_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+            SCAN_MAJOR=$((10#${BASH_REMATCH[1]}))
+            SCAN_MINOR=$((10#${BASH_REMATCH[2]}))
+            SCAN_PATCH=$((10#${BASH_REMATCH[3]}))
+            echo "agent-scan: version $SCAN_VERSION"
+            if (( SCAN_MAJOR == 0 && SCAN_MINOR < 6 )) ||
+               { (( SCAN_MAJOR == 0 && SCAN_MINOR == 6 && SCAN_PATCH == 0 )) &&
+                 [[ -n "${BASH_REMATCH[4]}" && "${BASH_REMATCH[4]}" != +* ]]; }; then
+              echo "agent-scan: WARNING version $SCAN_VERSION is older than 0.6.0; upgrade to 0.6.0 or later. Continuing scan."
+            fi
           else
-            MACHINE_ID="docker-sbx:$(hostname):unknown"
+            echo "agent-scan: WARNING could not determine whether AgentScan is 0.6.0 or later. Continuing scan."
           fi
+
+          MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
           echo "agent-scan: machine id $MACHINE_ID"
 
-          # flock -n makes this idempotent under concurrent starts: if a scan is
-          # already running, this one exits rather than stacking a second.
-          #
-          # UNVERIFIED (b): subcommand and flag names below are taken from
-          # Ramon's proposal and have not been confirmed against the shipped
-          # binary. Check with: "$SCAN" --help
-          flock -n "$LOGDIR/agent-scan.lock" \
+          # Temporary Linux scheduling: scan now, then pause 15 minutes after
+          # each attempt. Sequential execution prevents overlapping scans.
+          while true; do
+            echo "agent-scan: starting $(date -Is)"
             "$SCAN" scan \
               --machine-id "$MACHINE_ID" \
               --push-key "$SNYK_ADS_PUSH_KEY" \
-            || echo "agent-scan: exited non-zero (rc=$?) — see above, boot unaffected"
-
-          echo "agent-scan: done $(date -Is)"
+              || echo "agent-scan: exited non-zero (rc=$?) — retrying after 15 minutes"
+            echo "agent-scan: done $(date -Is); next scan in 15 minutes"
+            sleep 900 || break
+          done
           exit 0

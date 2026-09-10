@@ -8,7 +8,7 @@ Everything in [`../snyk-ads/`](../snyk-ads/), plus two additions from Ramon Lope
 proposal:
 
 1. **Per-sandbox machine identity**, built from `SANDBOX_NAME` + `SANDBOX_ID`.
-2. **A `setup.startup` hook** that re-runs the agent-scan inventory on every sandbox start,
+2. **A `setup.startup` hook** that re-runs the agent-scan inventory on every sandbox start and repeats after a 15-minute pause between scans,
    not just at creation.
 
 **Requires `sbx` 0.39.0 or later.** The supported kit needs only 0.38.0. That version bump is
@@ -49,7 +49,10 @@ Result: `docker-sbx:jacks-mbp-sandbox:01JAB...`, attributed to a named user.
 That block interpolates from the **host** shell at create time, and `SANDBOX_NAME` / `SANDBOX_ID`
 only exist **inside** the sandbox. Setting it there expands to an empty string — reproducing the
 exact all-sandboxes-in-one-row failure this change is meant to fix. It's composed inside the
-install command instead, where those variables are real.
+install and startup commands instead, where those variables are available. Both use
+`MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"` directly. sbx 0.39.0+ is required;
+installation fails if either variable is missing or empty. No identity file or older-version
+fallback is used.
 
 ### 2. Startup hook — closes a gap the supported kit has
 
@@ -71,16 +74,14 @@ starts unhooked.
 
 ## What changed from Ramon's sketch
 
-His version is a proposal in a doc, not a spec meant to run. Five things needed fixing before it
+His version is a proposal in a doc, not a spec meant to run. The following changes were needed before it
 would work:
 
 | His sketch | Problem | Here |
 | --- | --- | --- |
 | `--push-key "$PUSH_KEY"` | Variable doesn't exist — the kit sets `SNYK_ADS_PUSH_KEY`. Would push with an empty key. | Uses `SNYK_ADS_PUSH_KEY`, and skips with a logged reason if it's empty. |
 | `snyk-agent-scan` bare on `PATH` | Verified installs put ADS binaries in `~/.ads-scan/bin/`. | Resolves `~/.ads-scan/bin/` first, then `PATH`, then skips quietly. |
-| Recomputes `MACHINE_ID` independently in both steps | Install and startup could disagree. | Install writes `~/.snyk/machine-id`; startup reads it back. |
-| No fallback when `SANDBOX_ID` is absent | Exports an empty id on sbx < 0.39.0 — silently the old bug. | Falls back to `docker-sbx:$(hostname):unknown`, and a preflight step warns. |
-| Startup failure behaviour unstated | A failing inventory push could affect boot. | Every path ends `exit 0`. Logs to `~/.snyk/agent-scan-startup.log`. |
+| Startup failure behaviour unstated | A failing inventory push could affect boot. | Scan failures are logged and retried after 15 minutes. Logs to `~/.snyk/agent-scan-startup.log`. |
 
 Kept from his version, unchanged, because they're right: `flock -n` (idempotency under concurrent
 starts), `background: true`, and `set -eu` / `unset NPM_CONFIG_PREFIX` in install.
@@ -138,10 +139,9 @@ Staging a corporate CA works exactly as in the supported kit — drop it in
 
 ### What a good run prints
 
-Same as the supported kit, plus three new lines:
+Same as the supported kit, plus the machine identity:
 
 ```
-snyk-ads: sandbox identity OK (name=jacks-mbp-sandbox id=01JAB...)
 snyk-ads: machine id docker-sbx:jacks-mbp-sandbox:01JAB...
 ```
 
@@ -149,17 +149,16 @@ Then, after the sandbox starts:
 
 ```bash
 cat ~/.snyk/agent-scan-startup.log
-cat ~/.snyk/machine-id
 ```
 
-The startup hook appends a timestamped block per boot, so restarting the sandbox and re-reading
+The startup hook logs each scan attempt, so restarting the sandbox and re-reading
 that log is the quickest way to confirm the hook is firing at all.
 
 ### Checking it actually did something
 
 In the console, **Agent Behavior → Machines**: two sandboxes launched from this kit should be
-**two rows**, not one. That's the whole point of the change — if they collapse, `SANDBOX_ID`
-wasn't available and the preflight warning will say so.
+**two rows**, not one. If they collapse, compare the machine identity in each startup log
+and verify that the installer uses the exported `MACHINE_ID`.
 
 ---
 
@@ -167,7 +166,6 @@ wasn't available and the preflight warning will say so.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `WARNING SANDBOX_NAME/SANDBOX_ID not present` | `sbx` older than 0.39.0. | Upgrade, or use `../snyk-ads/`. Non-fatal — install proceeds with a degraded identity. |
 | Sandboxes still collapse to one row | Machine ID reached the installer empty, or the installer doesn't read `MACHINE_ID` from the environment. | Check the `machine id` line printed at install, then verifying item **(a)** above. |
 | `agent-scan: SKIP no scan binary found` | Install didn't complete, or the binary name changed. | The log lists `~/.ads-scan/bin/` contents. Compare against verifying item **(b)**. |
 | `agent-scan: SKIP push key not present` | `SNYK_ADS_PUSH_KEY` didn't carry into the startup environment. | Confirm it was exported at create time. Startup runs in a login shell; the kit's `environment.variables` should carry it. |
@@ -176,3 +174,13 @@ wasn't available and the preflight warning will say so.
 
 Everything else — TLS, credentials, egress, hooks — behaves as documented in the
 [root README](../README.md#troubleshooting).
+
+The startup log includes the AgentScan version. Versions older than 0.6.0, including
+0.6.0 prereleases, produce a warning; an unavailable or unrecognized version does too.
+These warnings do not prevent the inventory scan. This check does not enable Linux scheduling.
+
+While ADS installer scheduling is unavailable on Linux, the background startup worker
+runs a scan immediately, waits 900 seconds after each attempt, and repeats while the
+sandbox runs. A lifetime `flock` prevents duplicate workers, including during the wait.
+Failed scans are logged and retried on the next cycle. Stopping the sandbox stops the
+worker; starting it again launches a new worker with an immediate scan.
