@@ -54,24 +54,18 @@ class AuthTests(unittest.TestCase):
                     self.assertEqual(result.stdout.strip(), expected)
 
     def test_token_only_without_credential_defaults(self):
-        for kit in ('snyk-ads', 'snyk-ads-next'):
-            with self.subTest(kit=kit):
-                spec = (ROOT / kit / 'spec.yaml').read_text()
-                environment = spec.split('environment:\n', 1)[1].split('\npermissions:', 1)[0]
-                for name in ('SNYK_TOKEN', 'SNYK_TENANT_ID', 'SNYK_ADS_PUSH_KEY'):
-                    self.assertNotIn(name + ':', environment)
-                env = {k: v for k, v in self.env.items()
-                       if k not in ('SNYK_TENANT_ID', 'SNYK_ADS_PUSH_KEY')}
-                result = subprocess.run(
-                    ['sh', str(ROOT / kit / 'files/home/.snyk-kit/auth.sh')],
-                    env=env, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.strip(), 'standalone')
-
-    def test_bundled_helpers_match(self):
-        for name in ('auth.sh', 'install-agent-scan.sh', 'ads-components.sh'):
-            self.assertEqual((ROOT / 'snyk-ads/files/home/.snyk-kit' / name).read_bytes(),
-                             (ROOT / 'snyk-ads-next/files/home/.snyk-kit' / name).read_bytes())
+        kit = 'snyk-ads'
+        spec = (ROOT / kit / 'spec.yaml').read_text()
+        environment = spec.split('environment:\n', 1)[1].split('\npermissions:', 1)[0]
+        for name in ('SNYK_TOKEN', 'SNYK_TENANT_ID', 'SNYK_ADS_PUSH_KEY'):
+            self.assertNotIn(name + ':', environment)
+        env = {k: v for k, v in self.env.items()
+               if k not in ('SNYK_TENANT_ID', 'SNYK_ADS_PUSH_KEY')}
+        result = subprocess.run(
+            ['sh', str(ROOT / kit / 'files/home/.snyk-kit/auth.sh')],
+            env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'standalone')
 
     def mock_download(self):
         self.executable('uname', 'echo "$MOCK_ARCH"\n')
@@ -99,13 +93,12 @@ SCAN
 
     def test_standalone_install_bypasses_ads(self):
         self.mock_download()
-        for kit in ('snyk-ads', 'snyk-ads-next'):
-            with self.subTest(kit=kit):
-                result = subprocess.run(['sh', '-c', install_script(kit)], env=self.env, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
+        kit = 'snyk-ads'
+        result = subprocess.run(['sh', '-c', install_script(kit)], env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('agent-scan-0.9.7-linux-x86_64', (self.home / 'downloads').read_text())
         self.assertIn('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', (self.home / 'checksum').read_text())
-        self.assertEqual((self.home / 'scans').read_text(), 'scan\n')
+        self.assertFalse((self.home / 'scans').exists())
         self.assertFalse((self.home / '.snyk/ads-auth').exists())
 
     def test_arm64_asset(self):
@@ -120,7 +113,7 @@ SCAN
         self.mock_download()
         for env in ({'MOCK_CURL_RC': '22'}, {'MOCK_SHA_RC': '1'}, {'MOCK_ARCH': 'unsupported'}):
             with self.subTest(env=env):
-                result = subprocess.run(['sh', '-c', install_script('snyk-ads-next')],
+                result = subprocess.run(['sh', '-c', install_script('snyk-ads')],
                                         env={**self.env, **env}, capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((self.home / '.local/share/snyk-agent-scan/agent-scan').exists())
@@ -154,7 +147,7 @@ SCAN
                         self.assertNotEqual(lookup.returncode, 0)
 
     def test_recurring_scan_arguments(self):
-        text = (ROOT / 'snyk-ads-next/spec.yaml').read_text()
+        text = (ROOT / 'snyk-ads/spec.yaml').read_text()
         tail = text[text.index('          SCAN_ARGS=(scan'):]
         script = '\n'.join(line[10:] for line in tail.splitlines())
         for mode in ('standalone', 'enterprise'):

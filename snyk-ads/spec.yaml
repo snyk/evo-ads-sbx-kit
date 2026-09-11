@@ -1,8 +1,11 @@
 schemaVersion: "2"
 kind: mixin
 name: snyk-ads
+displayName: Snyk ADS
 requires:
   agent: claude
+
+# Requires sbx >= 0.39.0 for sandbox identity and startup commands.
 
 agentInstructions:
   content: |
@@ -37,6 +40,10 @@ agentInstructions:
     AgentScan authentication is separate from Snyk CLI authentication.
     Do not require `snyk auth` for AgentScan; it uses the supplied SNYK_TOKEN or
     enterprise push key. Report actual authentication errors from AgentScan.
+    Include `--machine-id "docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"` in either mode.
+    For startup scan status, read `~/.snyk/agent-scan-startup.log`. Enterprise
+    scans may submit asynchronous analysis; use `--show-analysis-results` for
+    findings in this conversation.
 
     Add explicit configuration or skill paths when the user requests a scoped scan.
     Preserve AgentScan's MCP execution consent behavior. If consent is required,
@@ -45,6 +52,30 @@ agentInstructions:
     Summarize findings, affected components, recommended fixes, and scan errors
     or skipped coverage. Do not equate a successful exit or upload with no findings.
     Propose remediation and apply changes when authorized by the user's request.
+
+
+    ## Studio and Snyk CLI authentication
+
+    In enterprise mode, SNYK_ADS_PUSH_KEY selects the installation mode and
+    SNYK_TENANT_ID is required. An optional SNYK_TOKEN authenticates Studio's
+    Snyk CLI without changing that mode. Studio also accepts existing Snyk CLI
+    credentials, including OAuth; a missing SNYK_TOKEN does not mean the CLI
+    is unauthenticated.
+
+    When checking Studio readiness, use its authentication helper without
+    printing the returned value or credential files. If authentication is
+    missing, guide the user through `snyk_auth` when available or `snyk auth`
+    using the installed CLI, and let the user complete the OAuth flow.
+    Alternatively, the user can export SNYK_TOKEN in their host terminal and
+    pass `-e SNYK_TOKEN` when launching the sandbox. Never request tokens in chat.
+    The ADS push key does not authenticate CLI code or dependency scans.
+    Missing Studio authentication does not block AgentScan or Guard work.
+
+    Studio's CLI may be under `~/.nvm/versions/node/*/bin/snyk` even when it is
+    absent from PATH. Use Studio's discovery helpers or locate the installed
+    executable before claiming it is missing. Do not reinstall it for an
+    authentication error. Credential presence is not proof of validity;
+    verify with the requested scan and report actual authentication failures.
 
 environment:
   variables:
@@ -75,7 +106,6 @@ setup:
           printf '\nunset NPM_CONFIG_PREFIX\n' >> /etc/sandbox-persistent.sh
         fi
 
-    # Add optional files/home/corp-ca/*.crt certificates to the system trust store.
     - description: "Install corporate root CA certificate(s) into the system trust store"
       user: "0"
       command: |
@@ -113,28 +143,30 @@ setup:
           echo "corp-ca: diagnose with: openssl s_client -connect downloads.snyk.io:443 -showcerts" >&2
         fi
 
-    # Preserve the system CA bundle required by the credential proxy.
-
     - description: "Validate Snyk credentials"
       user: "1000"
       command: |
         sh "$HOME/.snyk-kit/auth.sh"
 
-    # Install as the agent user; installer failures must stop setup.
     - description: "Install Snyk security tools"
       user: "1000"
       command: |
         set -eu
         unset NPM_CONFIG_PREFIX
 
+        # Docker sbx provides these identity variables at runtime.
+        : "${SANDBOX_NAME:?SANDBOX_NAME is required}"
+        : "${SANDBOX_ID:?SANDBOX_ID is required}"
+        MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
+        export MACHINE_ID
+        echo "snyk-ads: machine id ${MACHINE_ID}"
+
         AUTH_MODE="$(sh "$HOME/.snyk-kit/auth.sh")"
         if [ "$AUTH_MODE" = standalone ]; then
           sh "$HOME/.snyk-kit/install-agent-scan.sh"
-          "$HOME/.local/share/snyk-agent-scan/agent-scan" scan
           exit 0
         fi
 
-        # Select the installer for the sandbox architecture.
         case "$(uname -m)" in
           aarch64|arm64) ads_arch=arm64 ;;
           x86_64|amd64)  ads_arch=amd64 ;;
@@ -145,7 +177,7 @@ setup:
         if curl -fsSL --max-time 120 \
              "https://downloads.snyk.io/ads/installer/latest/ads-installer-linux-${ads_arch}" \
              -o /tmp/ads-installer; then
-          : # Download succeeded; validate the file below.
+          :
         else
           rc=$?
           echo "snyk-ads: ERROR installer download failed (curl exit $rc)." >&2
@@ -161,8 +193,92 @@ setup:
           echo "snyk-ads: ERROR downloaded installer is empty." >&2; exit 1; }
 
         chmod +x /tmp/ads-installer
+
+        # ADS currently assigns Guard the sandbox hostname.
         /tmp/ads-installer --tenant-id "$SNYK_TENANT_ID" --push-key "$SNYK_ADS_PUSH_KEY"
         mkdir -p "$HOME/.snyk"
         sh "$HOME/.snyk-kit/ads-components.sh" report > "$HOME/.snyk/ads-components.log"
         cat "$HOME/.snyk/ads-components.log"
         rm -f /tmp/ads-installer
+
+  # Temporary recurring scans until ADS supports Linux scheduling.
+  startup:
+    - description: "Upload Snyk agent-scan inventory every 15 minutes"
+      user: "1000"
+      background: true
+      command:
+        - bash
+        - -lc
+        - |
+          LOGDIR="$HOME/.snyk"
+          LOG="$LOGDIR/agent-scan-startup.log"
+          mkdir -p "$LOGDIR"
+          exec >>"$LOG" 2>&1
+          echo "===== $(date -Is) startup ====="
+
+          # Hold the lock between scans to prevent duplicate workers.
+          exec 9>"$LOGDIR/agent-scan.lock"
+          if ! flock -n 9; then
+            echo "agent-scan: SKIP inventory worker already running."
+            exit 0
+          fi
+
+          if ! AUTH_MODE="$(sh "$HOME/.snyk-kit/auth.sh")"; then
+            echo "agent-scan: SKIP credentials unavailable."
+            exit 0
+          fi
+
+          SCAN=""
+          if [ "$AUTH_MODE" = standalone ]; then
+            SCAN="$HOME/.local/share/snyk-agent-scan/agent-scan"
+            [ -x "$SCAN" ] || SCAN=""
+          else
+            SCAN="$(sh "$HOME/.snyk-kit/ads-components.sh" scan || true)"
+          fi
+
+          if [ -z "$SCAN" ]; then
+            echo "agent-scan: SKIP no scan binary found for $AUTH_MODE mode."
+            if [ "$AUTH_MODE" = enterprise ]; then
+              sh "$HOME/.snyk-kit/ads-components.sh" report
+              echo "agent-scan: Scan may be disabled in Evo settings; recurring scans will not run."
+            else
+              echo "agent-scan: Rerun standalone installation."
+            fi
+            exit 0
+          fi
+          echo "agent-scan: using $SCAN"
+
+          # The help subcommand reports the version without scanning.
+          if SCAN_HELP="$(NO_COLOR=1 timeout 15 "$SCAN" help 2>/dev/null)" &&
+             [[ "$SCAN_HELP" =~ Snyk\ Agent\ Scan\ v([0-9]+)\.([0-9]+)\.([0-9]+)([^[:space:]]*) ]]; then
+            SCAN_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+            SCAN_MAJOR=$((10#${BASH_REMATCH[1]}))
+            SCAN_MINOR=$((10#${BASH_REMATCH[2]}))
+            SCAN_PATCH=$((10#${BASH_REMATCH[3]}))
+            echo "agent-scan: version $SCAN_VERSION"
+            if (( SCAN_MAJOR == 0 && SCAN_MINOR < 6 )) ||
+               { (( SCAN_MAJOR == 0 && SCAN_MINOR == 6 && SCAN_PATCH == 0 )) &&
+                 [[ -n "${BASH_REMATCH[4]}" && "${BASH_REMATCH[4]}" != +* ]]; }; then
+              echo "agent-scan: WARNING version $SCAN_VERSION is older than 0.6.0; upgrade to 0.6.0 or later. Continuing scan."
+            fi
+          else
+            echo "agent-scan: WARNING could not determine whether AgentScan is 0.6.0 or later. Continuing scan."
+          fi
+
+          MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
+          echo "agent-scan: machine id $MACHINE_ID"
+
+          SCAN_ARGS=(scan --machine-id "$MACHINE_ID")
+          if [ "$AUTH_MODE" = enterprise ]; then
+            SCAN_ARGS+=(--push-key "$SNYK_ADS_PUSH_KEY")
+          fi
+
+          # Wait 15 minutes after each attempt; scans run sequentially.
+          while true; do
+            echo "agent-scan: starting $(date -Is)"
+            "$SCAN" "${SCAN_ARGS[@]}" \
+              || echo "agent-scan: exited non-zero (rc=$?) — retrying after 15 minutes"
+            echo "agent-scan: done $(date -Is); next scan in 15 minutes"
+            sleep 900 || break
+          done
+          exit 0
