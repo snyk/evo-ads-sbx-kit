@@ -9,7 +9,7 @@ call, shell execution and file write the agent makes is reported to the Snyk Evo
 The kit does four things:
 
 1. Stages your corporate root CA into the VM's trust store (Zscaler and friends).
-2. Preflights your two Snyk credentials and fails the create if either is missing or malformed.
+2. Selects standalone authentication with `SNYK_TOKEN`, or enterprise authentication with a tenant ID and push key.
 3. Downloads the correct architecture of the ADS installer and runs it as the agent user.
 4. Verifies the guard hooks were actually written, and fails loudly if they weren't.
 
@@ -171,25 +171,58 @@ replacement — that's why it's safe. **If you fork this kit, keep that line.**
 
 
 
-## The two credentials
+## Agent-assisted security reviews
 
+Both mixins provide agent instructions for on-demand security reviews. Ask the
+coding agent to “scan my agent configuration for security risks.” It can run
+AgentScan with the configured standalone or enterprise authentication, summarize
+findings in the current conversation, and propose remediation. Enterprise reviews
+request synchronous results with `--show-analysis-results` so findings are available
+locally as well as through the enterprise flow.
 
-|                       | `SNYK_TENANT_ID`                              | `SNYK_ADS_PUSH_KEY`                                             |
-| --------------------- | --------------------------------------------- | --------------------------------------------------------------- |
-| What it is            | A UUID identifying your tenant. Not a secret. | The credential the guard hooks push agent activity with.        |
-| Where to get it       | Snyk Evo console → Settings → General         | Snyk Evo console → Settings. Shown once.                        |
-| How it reaches the VM | `-e SNYK_TENANT_ID=<uuid>`                    | `-e SNYK_ADS_PUSH_KEY` (bare name, value from your shell)       |
-| Where it ends up      | An installer flag. Not persisted.             | Written to the hook config on disk inside the VM, in plaintext. |
-| Treat it as           | An identifier — fine in a runbook.            | A live secret. Store in 1Password; rotate if printed.           |
+These instructions guide the agent; they do not enforce execution or inject
+background scan output into an existing conversation. The `snyk-ads-next` background
+worker continues its existing schedule.
 
+## Authentication
 
-Only one of these is a secret. Treating the tenant ID as one costs ergonomics and buys nothing.
+The kits support two installation paths:
 
-**The push key is container-resident, and it cannot be otherwise.** The ADS installer writes it to
-disk inside the VM and the hooks read it for every push, so there is nothing for the credential
-proxy to inject into — which is why this kit correctly has no `credentials:` block. The security
-boundary here is the microVM plus the egress allow-list, not the absence of the secret. See §7 of
-the [How-To Guide](./docs/Snyk_ADS_Sandbox_Kit_-_How-To_Guide.pdf).
+| Mode | Credentials | Installation | Scans |
+| --- | --- | --- | --- |
+| Individual developer | `SNYK_TOKEN` only | Latest stable AgentScan from GitHub Releases | Standalone CLI analysis using the token |
+| Enterprise | `SNYK_TENANT_ID` and `SNYK_ADS_PUSH_KEY` | ADS installer, using the tenant's Evo settings | Enterprise analysis using the push key |
+
+An explicit push key selects enterprise mode and requires a valid tenant UUID,
+even if a token is also present. With only `SNYK_TOKEN`, no tenant ID is required.
+The standalone path does not invoke ADS, mint a push key, or install AgentGuard hooks.
+It uses AgentScan's CLI analysis route; it does not configure enterprise Evo inventory uploads.
+
+Credentials are supplied explicitly with `-e`; the kit does not declare credential
+defaults or import host variables. For standalone scans, pass only `SNYK_TOKEN`;
+no empty enterprise overrides are needed.
+
+Export `SNYK_TOKEN` in your shell, then pass its name to sbx:
+
+```bash
+sbx run claude --kit ./snyk-ads-next --name my-sandbox \
+  -e SNYK_TOKEN \
+  -e SANDBOX_USER="$(whoami)"
+```
+
+The standalone binary is downloaded from
+[AgentScan GitHub Releases](https://github.com/snyk/agent-scan/releases/latest),
+verified against the SHA-256 checksum published with that release for the sandbox architecture, and installed
+at `~/.local/share/snyk-agent-scan/agent-scan`. GitHub and its release asset host must
+be allowed by the sandbox's network policy.
+
+`snyk-ads` runs a standalone scan during installation. `snyk-ads-next` runs it at
+startup and repeats after a 15-minute pause between attempts. Results and errors
+from the recurring worker are written to `~/.snyk/agent-scan-startup.log`.
+
+The token is supplied through the environment, not a command-line argument or a
+credential cache. Enterprise push keys are written into hook configuration by ADS.
+Keep both credentials out of command-line literals and logs.
 
 ---
 
@@ -324,7 +357,7 @@ The kit allows five domains and nothing else:
 | `curl exit 22`                                       | HTTP error from `downloads.snyk.io`.                                                                      | Usually a wrong architecture path; the kit detects arch, so check the printed `linux-<arch>` line. |
 | `corp-ca: WARNING no .crt files found`               | Nothing under `files/home/corp-ca/`, or `sbx` < 0.38.0.                                                   | Non-fatal. Only a problem if the install then fails with 60/77. Check `sbx version`.               |
 | `SNYK_TENANT_ID is not a valid tenant ID`            | A tenant *name* or a truncated paste.                                                                     | Copy the UUID from Settings → General.                                                             |
-| `SNYK_ADS_PUSH_KEY is not set`                       | Expired `op` session, nearly always.                                                                      | `op whoami`, then `eval $(op signin)`, then re-export.                                             |
+| Credential validation fails | Missing tenant ID or authentication. | Set `SNYK_TOKEN`, or a tenant UUID together with `SNYK_ADS_PUSH_KEY`. |
 | `invalid character in secret reference: '('`         | 1Password item title contains parentheses.                                                                | Rename to a clean handle, or use the item UUID.                                                    |
 | `/token` reference fails                             | API Credential items store the value in a field named `credential`, not `token`.                          | `op item get <item>` to list real field names.                                                     |
 | npm step fails TLS but curl worked                   | Node ignores the system trust bundle.                                                                     | Already handled by `NODE_EXTRA_CA_CERTS`. Don't remove it if you fork.                             |
@@ -377,3 +410,13 @@ gets gated up front.
 - [Docker Sandboxes — managing credentials](https://docs.docker.com/ai/sandboxes/configuration/credentials/)
 - [Docker Sandboxes — authentication workflows](https://docs.docker.com/ai/sandboxes/workflows/authentication/)
 
+
+After an enterprise installation, the kit reports the Scan, Guard, and Studio
+binaries found in `~/.ads-scan/bin/` and saves the report to
+`~/.snyk/ads-components.log`. Each component is independently controlled by Evo
+settings; an omitted component does not fail setup. The report describes downloaded
+binaries, not hook activation or successful scan execution. For Studio, it checks
+the Studio installer artifact.
+
+If Scan is absent, the recurring worker logs the component inventory and exits.
+Enable Scan in Evo and reapply installation before expecting recurring scans.

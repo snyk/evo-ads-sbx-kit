@@ -156,7 +156,7 @@ that log is the quickest way to confirm the hook is firing at all.
 
 ### Checking it actually did something
 
-In the console, **Agent Behavior → Machines**: two sandboxes launched from this kit should be
+For enterprise mode, in the console, **Agent Behavior → Machines**: two sandboxes launched from this kit should be
 **two rows**, not one. If they collapse, compare the machine identity in each startup log
 and verify that the installer uses the exported `MACHINE_ID`.
 
@@ -168,7 +168,7 @@ and verify that the installer uses the exported `MACHINE_ID`.
 | --- | --- | --- |
 | Sandboxes still collapse to one row | Machine ID reached the installer empty, or the installer doesn't read `MACHINE_ID` from the environment. | Check the `machine id` line printed at install, then verifying item **(a)** above. |
 | `agent-scan: SKIP no scan binary found` | Install didn't complete, or the binary name changed. | The log lists `~/.ads-scan/bin/` contents. Compare against verifying item **(b)**. |
-| `agent-scan: SKIP push key not present` | `SNYK_ADS_PUSH_KEY` didn't carry into the startup environment. | Confirm it was exported at create time. Startup runs in a login shell; the kit's `environment.variables` should carry it. |
+| `agent-scan: SKIP credentials unavailable` | Required authentication is missing or invalid. | Supply `SNYK_TOKEN`, or a tenant UUID and `SNYK_ADS_PUSH_KEY`. |
 | Log file empty after a restart | The startup hook isn't running. | `sbx kit validate`, and confirm `setup.startup` is supported on your `sbx` version. |
 | Inventory appears twice per boot | Two starts raced and `flock` didn't hold. | Expected to be rare; report it — `flock -n` should make the second exit immediately. |
 
@@ -184,3 +184,10 @@ runs a scan immediately, waits 900 seconds after each attempt, and repeats while
 sandbox runs. A lifetime `flock` prevents duplicate workers, including during the wait.
 Failed scans are logged and retried on the next cycle. Stopping the sandbox stops the
 worker; starting it again launches a new worker with an immediate scan.
+
+Authentication accepts `SNYK_TOKEN` alone for standalone scans, or
+`SNYK_ADS_PUSH_KEY` together with `SNYK_TENANT_ID` for enterprise installation. Token authentication uses the standalone AgentScan binary from GitHub Releases. See [Authentication](../README.md#authentication).
+
+The mixin also supplies [agent instructions](../README.md#agent-assisted-security-reviews)
+for on-demand reviews in the current coding conversation, using either authentication mode.
+Enterprise reviews request local findings with `--show-analysis-results`.
