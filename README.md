@@ -7,6 +7,8 @@ The kit supports standalone AgentScan with a Snyk token and enterprise installat
 through ADS. It stages optional corporate certificates, installs tools, and runs
 AgentScan at startup and after a 15-minute pause between attempts.
 
+This repository is closed to public contributions.
+
 ## Getting started
 
 Clone the repository and validate the kit:
@@ -109,9 +111,12 @@ validation instructions. The kit adds certificates to the system trust store and
 sets Node's additional CA bundle. Missing certificates do not themselves abort setup,
 but intercepted downloads may fail without them.
 
-The kit allows `downloads.snyk.io`, `api.snyk.io`, `evo.snyk.io`, `app.snyk.io`,
-`registry.npmjs.org`, `github.com`, and `release-assets.githubusercontent.com`.
-Organization policy may require these domains to be allowed centrally.
+The kit allows `downloads.snyk.io`, `api.snyk.io`, `deeproxy.snyk.io`,
+`evo.snyk.io`, `app.snyk.io`, `registry.npmjs.org`, `github.com`, and
+`release-assets.githubusercontent.com`. Snyk Code (SAST) needs access to
+`deeproxy.snyk.io`. Organization policy may require these domains to be allowed
+centrally. Kit changes apply when creating a sandbox; existing sandboxes need
+their network policy updated or must be recreated.
 
 ## Agent-assisted security reviews
 
