@@ -38,8 +38,7 @@ evo-ads-sbx-kit/
 ```
 
 Pass the entire `snyk-ads/` directory to `--kit`. Copy that directory when
-vendoring the kit into another project. The older PDF and Word guides under
-`docs/` describe the previous setup; use this README for current commands.
+vendoring the kit into another project.
 
 ## Authentication
 
