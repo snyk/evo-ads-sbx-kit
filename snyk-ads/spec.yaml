@@ -53,14 +53,13 @@ agentInstructions:
     or skipped coverage. Do not equate a successful exit or upload with no findings.
     Propose remediation and apply changes when authorized by the user's request.
 
-
     ## Studio and Snyk CLI authentication
 
     In enterprise mode, SNYK_ADS_PUSH_KEY selects the installation mode and
     SNYK_TENANT_ID is required. An optional SNYK_TOKEN authenticates Studio's
     Snyk CLI without changing that mode. Studio also accepts existing Snyk CLI
-    credentials, including OAuth; a missing SNYK_TOKEN does not mean the CLI
-    is unauthenticated.
+    credentials, including OAuth; a missing SNYK_TOKEN doesn't mean Studio can't
+    be authenticated.
 
     When checking Studio readiness, use its authentication helper without
     printing the returned value or credential files. If authentication is
@@ -88,6 +87,7 @@ permissions:
     allow:
       - downloads.snyk.io
       - api.snyk.io
+      - deeproxy.snyk.io
       - evo.snyk.io
       - app.snyk.io
       - registry.npmjs.org
