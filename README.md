@@ -94,7 +94,7 @@ Guard reports matches Scan's from the very first install — see
 
 ### All three components
 
-```basha
+```bash
 sbx run claude \
   --kit ./snyk-ads \
   --name "$(hostname)-sandbox-all" \
