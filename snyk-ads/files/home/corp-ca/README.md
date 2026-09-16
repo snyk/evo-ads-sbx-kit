@@ -1,7 +1,7 @@
 # Put your corporate root CA certificate(s) here
 
 Every `*.crt` file in this directory is installed into the sandbox's system trust store
-before the Snyk ADS installer runs.
+before the Snyk downloads below run.
 
 ```
 snyk-ads/files/home/corp-ca/zscaler-root-ca.crt   →   /home/agent/corp-ca/zscaler-root-ca.crt
@@ -24,7 +24,8 @@ security find-certificate -a -c "Zscaler Root CA" -p \
 ```
 
 Other export routes — Linux paths, and pulling the root out of the live TLS chain — are in
-the [repo README](../../../../README.md#staging-the-corporate-ca-certificate).
+the [repo README](../../../../README.md#staging-the-corporate-ca-certificate), along with a
+one-liner to check whether you need a cert at all before assuming either way.
 
 ## Four rules
 
@@ -54,4 +55,7 @@ is usually fine. If that's what you want, force-add it and check your org's poli
 git add -f snyk-ads/files/home/corp-ca/zscaler-root-ca.crt
 ```
 
-Requires `sbx` 0.38.0 or later — that's when `files/` staging landed.
+Requires `sbx` 0.38.0 or later — that's when `files/` staging landed. The
+kit as a whole requires 0.39.0 or later (see the repo README) for the
+sandbox identity variables its startup commands depend on; that floor, not
+this one, is what actually gates using the kit.
