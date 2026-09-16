@@ -126,6 +126,15 @@ class ResolveComponentsTests(KitTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown component 'scn'", result.stderr)
 
+    def test_components_that_parse_to_nothing_fail(self):
+        # Whitespace/comma-only values pass the loop with zero iterations rather
+        # than an unknown-component error, so this needs its own guard.
+        for raw in (' ', ',', ' , , '):
+            with self.subTest(raw=raw):
+                result = self.resolve_components(SNYK_COMPONENTS=raw, SNYK_TOKEN='token')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('resolved to no components', result.stderr)
+
 
 class InstallAgentScanShTests(KitTestCase):
     """install-agent-scan.sh downloads the same binary used for both scan and guard."""

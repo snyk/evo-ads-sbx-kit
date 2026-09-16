@@ -25,6 +25,11 @@ for component in $normalized; do
   esac
 done
 
+if [ "$scan" = 0 ] && [ "$guard" = 0 ] && [ "$studio" = 0 ]; then
+  echo "snyk-ads: ERROR SNYK_COMPONENTS ('$raw') resolved to no components; expected a comma-separated list of scan, guard, studio." >&2
+  exit 1
+fi
+
 if [ "$guard" = 1 ] && [ "$auth_mode" != enterprise ]; then
   echo "snyk-ads: ERROR guard requires SNYK_ADS_PUSH_KEY." >&2
   exit 1
