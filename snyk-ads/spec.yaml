@@ -11,39 +11,28 @@ agentInstructions:
   content: |
     ## Agent security scans
 
-    This kit installs Snyk tools into the current sandbox during setup.
-    When asked whether AgentScan is installed or to review agent security,
-    check the runtime installation using `sh "$HOME/.snyk-kit/auth.sh"` to
-    determine authentication mode. Do not print credentials.
+    This kit installs the Snyk components requested via SNYK_COMPONENTS
+    (comma-separated: scan, guard, studio; default "scan") into the sandbox
+    during setup. Check what was actually requested and installed with
+    `sh "$HOME/.snyk-kit/resolve-components.sh"`, which prints
+    `scan=0|1 guard=0|1 studio=0|1 auth_mode=enterprise|standalone|none` and
+    fails if a requested component is missing required credentials. Do not
+    print credentials.
 
-    In enterprise mode, locate Scan with
-    `SCAN_BIN="$(sh "$HOME/.snyk-kit/ads-components.sh" scan)"`.
-    ADS installs architecture-specific binaries under `~/.ads-scan/bin/`, such as
-    `snyk-scan-linux-arm64` or `snyk-scan-linux-x86_64`. They need not be on PATH
-    or named `agent-scan`. Run the resolved executable with
-    `"$SCAN_BIN" scan --show-analysis-results --push-key "$SNYK_ADS_PUSH_KEY"`.
-    Expand the key in the shell; never copy its value into commands or responses.
-    If Scan is absent, run `sh "$HOME/.snyk-kit/ads-components.sh" report` and
-    read `~/.snyk/ads-components.log` if present. Scan, Guard, and Studio are
-    independently enabled in Evo; another component's presence does not imply
-    Scan is installed. Do not install the standalone binary to replace a
-    disabled enterprise component without the user's instruction.
+    AgentScan (Scan and Guard share one binary) always lives at
+    `~/.local/share/snyk-agent-scan/agent-scan`, regardless of auth mode. A
+    missing binary means scan wasn't requested, or install failed - check
+    `~/.snyk/agent-scan-startup.log`. Run scans with
+    `"$HOME/.local/share/snyk-agent-scan/agent-scan" scan --show-analysis-results --machine-id "docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"`,
+    adding `--push-key "$SNYK_ADS_PUSH_KEY"` in enterprise mode (auth_mode from
+    resolve-components.sh). Expand the key in the shell; never copy its value
+    into commands or responses.
 
-    In standalone mode, use
-    `"$HOME/.local/share/snyk-agent-scan/agent-scan" scan --show-analysis-results`.
-    SNYK_TOKEN is supplied through the environment; no tenant ID is needed.
-    A missing standalone directory is expected in enterprise mode. Neither
-    `which agent-scan` nor that directory alone establishes that Scan is absent.
-    Inspect the active mode's executable before suggesting installation; files
-    in the mounted repository describe the kit, not its runtime install state.
-
-    AgentScan authentication is separate from Snyk CLI authentication.
-    Do not require `snyk auth` for AgentScan; it uses the supplied SNYK_TOKEN or
+    AgentScan authentication is separate from Snyk CLI authentication. Do not
+    require `snyk auth` for AgentScan; it uses the supplied SNYK_TOKEN or
     enterprise push key. Report actual authentication errors from AgentScan.
-    Include `--machine-id "docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"` in either mode.
-    For startup scan status, read `~/.snyk/agent-scan-startup.log`. Enterprise
-    scans may submit asynchronous analysis; use `--show-analysis-results` for
-    findings in this conversation.
+    Enterprise scans may submit asynchronous analysis; use
+    `--show-analysis-results` for findings in this conversation.
 
     Add explicit configuration or skill paths when the user requests a scoped scan.
     Preserve AgentScan's MCP execution consent behavior. If consent is required,
@@ -55,11 +44,11 @@ agentInstructions:
 
     ## Studio and Snyk CLI authentication
 
-    In enterprise mode, SNYK_ADS_PUSH_KEY selects the installation mode and
-    SNYK_TENANT_ID is required. An optional SNYK_TOKEN authenticates Studio's
-    Snyk CLI without changing that mode. Studio also accepts existing Snyk CLI
-    credentials, including OAuth; a missing SNYK_TOKEN doesn't mean Studio can't
-    be authenticated.
+    Studio installs independently of Scan/Guard credentials - it needs no
+    push key or token to install, only to authenticate its Snyk CLI
+    afterward. An optional SNYK_TOKEN authenticates Studio's Snyk CLI. Studio
+    also accepts existing Snyk CLI credentials, including OAuth; a missing
+    SNYK_TOKEN doesn't mean Studio can't be authenticated.
 
     When checking Studio readiness, use its authentication helper without
     printing the returned value or credential files. If authentication is
@@ -120,7 +109,7 @@ setup:
         if [ "$found" = 0 ]; then
           echo "corp-ca: WARNING no .crt files found under /home/agent/corp-ca/." >&2
           echo "corp-ca: continuing without a corporate root CA. If outbound TLS is" >&2
-          echo "corp-ca: intercepted, the Snyk ADS install below will fail with curl" >&2
+          echo "corp-ca: intercepted, the Snyk downloads below will fail with curl" >&2
           echo "corp-ca: exit 60/77 — that is your signal to ship the cert at" >&2
           echo "corp-ca: files/home/corp-ca/<name>.crt (PEM content, .crt extension)." >&2
           exit 0
@@ -132,7 +121,7 @@ setup:
       user: "1000"
       command: |
         # Diagnostic only; network policy may block the probe.
-        if curl -fsS -I --max-time 20 -o /dev/null https://downloads.snyk.io/ 2>/dev/null; then
+        if curl -fsS -I --max-time 20 -o /dev/null https://github.com/ 2>/dev/null; then
           echo "corp-ca: outbound TLS verified"
         else
           rc=$?
@@ -140,66 +129,56 @@ setup:
           echo "corp-ca:   60/77 => TLS trust problem: ship the ROOT CA in PEM form." >&2
           echo "corp-ca:    6/7  => egress blocked, not a cert problem. Under org" >&2
           echo "corp-ca:            governance, kit allow rules are IGNORED." >&2
-          echo "corp-ca: diagnose with: openssl s_client -connect downloads.snyk.io:443 -showcerts" >&2
+          echo "corp-ca: diagnose with: openssl s_client -connect github.com:443 -showcerts" >&2
         fi
 
-    - description: "Validate Snyk credentials"
+    - description: "Validate Snyk credentials and requested components"
       user: "1000"
       command: |
-        sh "$HOME/.snyk-kit/auth.sh"
+        set -eu
+        COMPONENTS_OUTPUT="$(sh "$HOME/.snyk-kit/resolve-components.sh")" || exit 1
+        eval "$COMPONENTS_OUTPUT"
+        echo "snyk-ads: components scan=$scan guard=$guard studio=$studio (auth_mode=$auth_mode)"
 
-    - description: "Install Snyk security tools"
+    - description: "Install AgentScan and/or Guard"
       user: "1000"
       command: |
         set -eu
         unset NPM_CONFIG_PREFIX
+        COMPONENTS_OUTPUT="$(sh "$HOME/.snyk-kit/resolve-components.sh")" || exit 1
+        eval "$COMPONENTS_OUTPUT"
 
-        # Docker sbx provides these identity variables at runtime.
-        : "${SANDBOX_NAME:?SANDBOX_NAME is required}"
-        : "${SANDBOX_ID:?SANDBOX_ID is required}"
-        MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
-        export MACHINE_ID
-        echo "snyk-ads: machine id ${MACHINE_ID}"
-
-        AUTH_MODE="$(sh "$HOME/.snyk-kit/auth.sh")"
-        if [ "$AUTH_MODE" = standalone ]; then
-          sh "$HOME/.snyk-kit/install-agent-scan.sh"
+        if [ "$scan" != 1 ] && [ "$guard" != 1 ]; then
+          echo "snyk-ads: scan and guard not requested; skipping AgentScan install."
           exit 0
         fi
 
-        case "$(uname -m)" in
-          aarch64|arm64) ads_arch=arm64 ;;
-          x86_64|amd64)  ads_arch=amd64 ;;
-          *) echo "snyk-ads: ERROR unsupported architecture $(uname -m)" >&2; exit 1 ;;
-        esac
-        echo "snyk-ads: installing for linux-${ads_arch}"
+        sh "$HOME/.snyk-kit/install-agent-scan.sh"
 
-        if curl -fsSL --max-time 120 \
-             "https://downloads.snyk.io/ads/installer/latest/ads-installer-linux-${ads_arch}" \
-             -o /tmp/ads-installer; then
-          :
-        else
-          rc=$?
-          echo "snyk-ads: ERROR installer download failed (curl exit $rc)." >&2
-          echo "  60/77 => TLS trust: ship your corp root CA at files/home/corp-ca/<name>.crt" >&2
-          echo "   6/7  => egress blocked. Under organization governance, kit-level allow" >&2
-          echo "           rules are IGNORED — downloads.snyk.io must be allowed centrally." >&2
-          echo "           Check with: sbx policy ls" >&2
-          echo "   22   => HTTP error from downloads.snyk.io (wrong arch path?)" >&2
-          exit 1
+        if [ "$guard" = 1 ]; then
+          # Docker sbx provides these identity variables at runtime.
+          : "${SANDBOX_NAME:?SANDBOX_NAME is required}"
+          : "${SANDBOX_ID:?SANDBOX_ID is required}"
+          MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
+          echo "snyk-ads: installing Guard hooks under machine id ${MACHINE_ID}"
+          PUSH_KEY="$SNYK_ADS_PUSH_KEY" TENANT_ID="${SNYK_TENANT_ID:-}" MACHINE_ID="$MACHINE_ID" \
+            "$HOME/.local/share/snyk-agent-scan/agent-scan" guard install claude
         fi
 
-        [ -s /tmp/ads-installer ] || {
-          echo "snyk-ads: ERROR downloaded installer is empty." >&2; exit 1; }
+    - description: "Install Snyk Studio"
+      user: "1000"
+      command: |
+        set -eu
+        unset NPM_CONFIG_PREFIX
+        COMPONENTS_OUTPUT="$(sh "$HOME/.snyk-kit/resolve-components.sh")" || exit 1
+        eval "$COMPONENTS_OUTPUT"
 
-        chmod +x /tmp/ads-installer
+        if [ "$studio" != 1 ]; then
+          echo "snyk-ads: studio not requested; skipping."
+          exit 0
+        fi
 
-        # ADS currently assigns Guard the sandbox hostname.
-        /tmp/ads-installer --tenant-id "$SNYK_TENANT_ID" --push-key "$SNYK_ADS_PUSH_KEY"
-        mkdir -p "$HOME/.snyk"
-        sh "$HOME/.snyk-kit/ads-components.sh" report > "$HOME/.snyk/ads-components.log"
-        cat "$HOME/.snyk/ads-components.log"
-        rm -f /tmp/ads-installer
+        sh "$HOME/.snyk-kit/install-studio.sh"
 
   # Temporary recurring scans until ADS supports Linux scheduling.
   startup:
@@ -223,27 +202,20 @@ setup:
             exit 0
           fi
 
-          if ! AUTH_MODE="$(sh "$HOME/.snyk-kit/auth.sh")"; then
-            echo "agent-scan: SKIP credentials unavailable."
+          COMPONENTS_OUTPUT="$(sh "$HOME/.snyk-kit/resolve-components.sh" 2>/dev/null)" || {
+            echo "agent-scan: SKIP component resolution failed (credentials missing/invalid)."
+            exit 0
+          }
+          eval "$COMPONENTS_OUTPUT"
+
+          if [ "$scan" != 1 ]; then
+            echo "agent-scan: SKIP scan not requested (SNYK_COMPONENTS)."
             exit 0
           fi
 
-          SCAN=""
-          if [ "$AUTH_MODE" = standalone ]; then
-            SCAN="$HOME/.local/share/snyk-agent-scan/agent-scan"
-            [ -x "$SCAN" ] || SCAN=""
-          else
-            SCAN="$(sh "$HOME/.snyk-kit/ads-components.sh" scan || true)"
-          fi
-
-          if [ -z "$SCAN" ]; then
-            echo "agent-scan: SKIP no scan binary found for $AUTH_MODE mode."
-            if [ "$AUTH_MODE" = enterprise ]; then
-              sh "$HOME/.snyk-kit/ads-components.sh" report
-              echo "agent-scan: Scan may be disabled in Evo settings; recurring scans will not run."
-            else
-              echo "agent-scan: Rerun standalone installation."
-            fi
+          SCAN="$HOME/.local/share/snyk-agent-scan/agent-scan"
+          if [ ! -x "$SCAN" ]; then
+            echo "agent-scan: SKIP scan binary not found; rerun standalone installation."
             exit 0
           fi
           echo "agent-scan: using $SCAN"
@@ -269,7 +241,7 @@ setup:
           echo "agent-scan: machine id $MACHINE_ID"
 
           SCAN_ARGS=(scan --machine-id "$MACHINE_ID")
-          if [ "$AUTH_MODE" = enterprise ]; then
+          if [ "$auth_mode" = enterprise ]; then
             SCAN_ARGS+=(--push-key "$SNYK_ADS_PUSH_KEY")
           fi
 
