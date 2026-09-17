@@ -2,6 +2,7 @@ schemaVersion: "2"
 kind: mixin
 name: snyk-evo-ads
 displayName: Snyk Evo ADS
+description: "Installs Snyk AgentScan, Agent Guard, and/or Snyk Studio, selected via SNYK_COMPONENTS, directly from their public release channels"
 
 # Agent-agnostic: no `requires.agent`. guard install all (below) installs
 # hooks for whichever of claude/cursor/codex is actually present, skipping
@@ -15,11 +16,13 @@ agentInstructions:
 
     This kit installs the Snyk components requested via SNYK_COMPONENTS
     (comma-separated: scan, guard, studio; default "scan") into the sandbox
-    during setup. Check what was actually requested and installed with
-    `sh "$HOME/.snyk-kit/resolve-components.sh"`, which prints
-    `scan=0|1 guard=0|1 studio=0|1 auth_mode=enterprise|standalone|none` and
-    fails if a requested component is missing required credentials. Do not
-    print credentials.
+    during setup, unconditionally - the AgentScan/Guard/Studio binaries are
+    public and install regardless of credentials. Check what was actually
+    requested with `sh "$HOME/.snyk-kit/resolve-components.sh"`, which prints
+    `scan=0|1 guard=0|1 studio=0|1 auth_mode=enterprise|standalone|none`.
+    auth_mode=none means scan/guard hooks are inactive even if selected -
+    that's expected when no SNYK_TOKEN or SNYK_ADS_PUSH_KEY was supplied, not
+    an install failure. Do not print credentials.
 
     AgentScan (Scan and Guard share one binary) always lives at
     `~/.local/share/snyk-agent-scan/agent-scan`, regardless of auth mode. A
@@ -136,13 +139,16 @@ setup:
           echo "corp-ca: diagnose with: openssl s_client -connect github.com:443 -showcerts" >&2
         fi
 
-    - description: "Validate Snyk credentials and requested components"
+    - description: "Resolve requested Snyk components"
       user: "1000"
       command: |
         set -eu
         COMPONENTS_OUTPUT="$(sh "$HOME/.snyk-kit/resolve-components.sh")" || exit 1
         eval "$COMPONENTS_OUTPUT"
         echo "snyk-ads: components scan=$scan guard=$guard studio=$studio (auth_mode=$auth_mode)"
+        if [ "$auth_mode" = none ]; then
+          echo "snyk-ads: no SNYK_TOKEN or SNYK_ADS_PUSH_KEY supplied; binaries install, but scan/guard hooks stay inactive until a credential is set and the sandbox is recreated."
+        fi
 
     - description: "Install AgentScan and/or Guard"
       user: "1000"
@@ -157,14 +163,22 @@ setup:
           exit 0
         fi
 
+        # Installs unconditionally: the binary is public and needs no
+        # credential. Only guard install below needs one.
         sh "$HOME/.snyk-kit/install-agent-scan.sh"
 
         if [ "$guard" = 1 ]; then
+          if [ "$auth_mode" != enterprise ]; then
+            echo "snyk-ads: guard requested but SNYK_ADS_PUSH_KEY is not set; skipping Guard hook installation. Set SNYK_ADS_PUSH_KEY and recreate the sandbox to enable Guard."
+            exit 0
+          fi
           # Docker sbx provides these identity variables at runtime.
           : "${SANDBOX_NAME:?SANDBOX_NAME is required}"
           : "${SANDBOX_ID:?SANDBOX_ID is required}"
           MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
           echo "snyk-ads: installing Guard hooks under machine id ${MACHINE_ID}"
+          # "all" installs hooks for whichever of claude/cursor/codex is
+          # actually present, skipping the rest with a warning.
           set -- guard install all
           if [ -n "${SNYK_API:-}" ]; then
             echo "snyk-ads: using Snyk API base ${SNYK_API}"
@@ -223,13 +237,18 @@ setup:
           fi
 
           COMPONENTS_OUTPUT="$(sh "$HOME/.snyk-kit/resolve-components.sh" 2>/dev/null)" || {
-            echo "agent-scan: SKIP component resolution failed (credentials missing/invalid)."
+            echo "agent-scan: SKIP component resolution failed (malformed SNYK_COMPONENTS)."
             exit 0
           }
           eval "$COMPONENTS_OUTPUT"
 
           if [ "$scan" != 1 ]; then
             echo "agent-scan: SKIP scan not requested (SNYK_COMPONENTS)."
+            exit 0
+          fi
+
+          if [ "$auth_mode" = none ]; then
+            echo "agent-scan: SKIP no SNYK_TOKEN or SNYK_ADS_PUSH_KEY supplied."
             exit 0
           fi
 

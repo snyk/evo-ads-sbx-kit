@@ -105,15 +105,15 @@ class ResolveComponentsTests(KitTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), 'scan=0 guard=0 studio=1 auth_mode=none')
 
-    def test_guard_without_push_key_fails(self):
+    def test_guard_without_push_key_still_resolves(self):
         result = self.resolve_components(SNYK_COMPONENTS='guard', SNYK_TOKEN='token')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('guard requires SNYK_ADS_PUSH_KEY', result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'scan=0 guard=1 studio=0 auth_mode=standalone')
 
-    def test_scan_without_any_credential_fails(self):
+    def test_scan_without_any_credential_still_resolves(self):
         result = self.resolve_components(SNYK_COMPONENTS='scan')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('scan requires SNYK_TOKEN or SNYK_ADS_PUSH_KEY', result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'scan=1 guard=0 studio=0 auth_mode=none')
 
     def test_scan_accepts_push_key_without_token(self):
         result = self.resolve_components(SNYK_COMPONENTS='scan', SNYK_ADS_PUSH_KEY='key')
@@ -301,11 +301,12 @@ SCAN
         invocations = (self.home / 'guard-invocations').read_text()
         self.assertIn('TENANT_ID=12345678-1234-1234-1234-123456789abc', invocations)
 
-    def test_missing_credentials_abort_before_any_download(self):
+    def test_guard_without_push_key_installs_binary_but_skips_hooks(self):
         result = self.run_step(SNYK_COMPONENTS='guard', SNYK_TOKEN='token')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('guard requires SNYK_ADS_PUSH_KEY', result.stderr)
-        self.assertFalse((self.home / '.local/share/snyk-agent-scan/agent-scan').exists())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('skipping Guard hook installation', result.stdout)
+        self.assertTrue((self.home / '.local/share/snyk-agent-scan/agent-scan').exists())
+        self.assertFalse((self.home / 'guard-invocations').exists())
 
     def test_guard_forwards_custom_snyk_api_as_url_flag(self):
         result = self.run_step(SNYK_COMPONENTS='guard', SNYK_ADS_PUSH_KEY='push-key-value',
@@ -405,6 +406,14 @@ sleep() { [ "$1" = 900 ] || exit 99; wait=$((wait+1)); [ "$wait" -lt 2 ]; }
                 self.assertEqual('--push-key test-key' in scans[0], expects_push_key)
                 self.assertNotIn('--analysis-url', scans[0])
                 self.assertIn('exited non-zero', result.stdout)
+
+    def test_skips_scan_when_no_credential_supplied(self):
+        text = extract_step('Upload Snyk agent-scan inventory every 15 minutes')
+        tail = text[text.index('COMPONENTS_OUTPUT="$(sh'):]
+        result = subprocess.run(['sh', '-c', tail], env={**self.env, 'SNYK_COMPONENTS': 'scan'},
+                                 capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('SKIP no SNYK_TOKEN or SNYK_ADS_PUSH_KEY supplied', result.stdout)
 
     def test_scan_forwards_custom_snyk_api_as_analysis_url(self):
         text = extract_step('Upload Snyk agent-scan inventory every 15 minutes')
