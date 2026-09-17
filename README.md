@@ -116,15 +116,6 @@ authenticate interactively via `snyk_auth`/`snyk auth` inside the sandbox, or
 you can pass `-e SNYK_TOKEN` alongside `SNYK_COMPONENTS=studio` to
 pre-authenticate it. Never paste credentials into the agent conversation.
 
-**Studio installs its full default recipe set, and it is deliberately
-aggressive.** It installs Claude Code hooks that fire on `SessionStart`,
-`PostToolUse` for every `Edit`/`Write`/`Bash` tool call, and `Stop` — not
-just at install time. It also registers a Snyk MCP server, adds a
-per-repo git pre-commit hook, and adds a **global** git pre-commit hook that
-applies to every repository inside the sandbox, not just the current one.
-This is Studio's own "Secure at Inception" design, not something this kit
-configures or scopes down.
-
 ## Corporate certificates and network access
 
 ### Do you even need this?
@@ -218,20 +209,6 @@ Background results are logged rather than inserted into an existing conversation
 Enterprise background scans can submit asynchronous analysis to Snyk. MCP execution
 consent is preserved for interactive scans.
 
-## Identity and recurring scans
-
-Both Scan and Guard receive `--machine-id "docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"`
-— Docker provides these variables inside the sandbox. The ID survives a restart
-and changes when the sandbox is recreated. Because this kit installs Guard's
-hooks directly with that machine ID (rather than relying on Snyk's ADS
-installer, which has no way to accept a caller-supplied identity), Scan and
-Guard always report under the same identity, from the very first install.
-
-The background worker scans immediately, waits 900 seconds after each attempt, and
-repeats. A lock prevents duplicate workers. Failures are logged and retried without
-blocking sandbox startup. A missing Scan binary causes the worker to exit. AgentScan
-versions below 0.6.0, or an unreadable version, produce a warning without stopping scans.
-
 ## Verification and troubleshooting
 
 ```bash
@@ -255,11 +232,3 @@ at `~/.local/share/snyk-studio/snyk-studio-installer`.
 | Sandbox creation fails immediately with a `snyk-ads: ERROR` | Which component was requested and which credential it needs (see [Components](#components)) |
 | No Scan binary | Whether `scan` was actually requested in `SNYK_COMPONENTS` |
 | No recurring output | Startup log and sbx version |
-
-## Local checks
-
-```bash
-python3 -m unittest discover -s tests -v
-shellcheck snyk-ads/files/home/.snyk-kit/*.sh
-sbx kit validate ./snyk-ads
-```
