@@ -116,6 +116,30 @@ authenticate interactively via `snyk_auth`/`snyk auth` inside the sandbox, or
 you can pass `-e SNYK_TOKEN` alongside `SNYK_COMPONENTS=studio` to
 pre-authenticate it. Never paste credentials into the agent conversation.
 
+### Custom Snyk API base (`SNYK_API`)
+
+By default Scan and Guard talk to `https://api.snyk.io`. Set `SNYK_API` to
+point them at a different Snyk API base instead — the kit passes it to
+`guard install` as `--url`, and to `scan` as `--analysis-url` with the same
+path AgentScan uses by default (only the host changes):
+
+```bash
+sbx run claude \
+  --kit . \
+  --name "$(hostname)-sandbox" \
+  -e SNYK_COMPONENTS=scan,guard \
+  -e SNYK_ADS_PUSH_KEY \
+  -e SNYK_API=https://api.example-region.snyk.io
+```
+
+`permissions.network.allow` in `spec.yaml` allow-lists `**.snyk.io` (any
+host under `snyk.io`, at any subdomain depth), so a `SNYK_API` host under
+`snyk.io` (as in the example above) needs no extra setup. A host outside
+`snyk.io` isn't reachable until you also run
+`sbx policy allow network <host>` (optionally scoped with
+`--sandbox <name>`) before creating the sandbox — otherwise the sandbox's
+network policy blocks it regardless of what `SNYK_API` says.
+
 ## Corporate certificates and network access
 
 ### Do you even need this?
