@@ -33,13 +33,9 @@ agentInstructions:
     An optional SNYK_API overrides the Snyk API base URL (default
     https://api.snyk.io). The kit passes it to Guard install as --url, and to
     Scan as --analysis-url with the same path AgentScan uses by default
-    (only the host changes). This kit's network allowlist covers any
-    any host under snyk.io (any subdomain depth), so a SNYK_API host under
-    snyk.io works with no extra setup. A host outside snyk.io needs the user
-    to also run
-    `sbx policy allow network <host>` (optionally `--sandbox <name>`) before
-    creating the sandbox, or the sandbox's network policy blocks it
-    regardless of what SNYK_API says.
+    (only the host changes). This kit's network allowlist covers any host
+    under snyk.io (any subdomain depth), so a SNYK_API host under snyk.io
+    works with no extra setup. 
 
     AgentScan authentication is separate from Snyk CLI authentication. Do not
     require `snyk auth` for AgentScan; it uses the supplied SNYK_TOKEN or
@@ -82,7 +78,6 @@ environment:
   variables:
     # Extend Node’s trust store with the system CA bundle.
     NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt"
-    USER: "$SANDBOX_USER"
 
 permissions:
   network:
