@@ -291,7 +291,7 @@ SCAN
         result = self.run_step(SNYK_COMPONENTS='scan,guard', SNYK_ADS_PUSH_KEY='push-key-value')
         self.assertEqual(result.returncode, 0, result.stderr)
         invocations = (self.home / 'guard-invocations').read_text()
-        self.assertIn('guard install claude', invocations)
+        self.assertIn('guard install all', invocations)
         self.assertIn('env PUSH_KEY=push-key-value TENANT_ID= MACHINE_ID=docker-sbx:test:123', invocations)
 
     def test_guard_forwards_tenant_id_when_supplied(self):

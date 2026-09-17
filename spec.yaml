@@ -3,9 +3,10 @@ kind: mixin
 name: snyk-evo-ads
 displayName: Snyk Evo ADS
 
-# Agent-agnostic: no `requires.agent`. Note that guard install claude below
-# and the agentInstructions content are still Claude Code-specific in
-# practice; genuine multi-agent support needs those generalized too.
+# Agent-agnostic: no `requires.agent`. guard install all (below) installs
+# hooks for whichever of claude/cursor/codex is actually present, skipping
+# the rest with a warning rather than erroring. agentInstructions content is
+# still Claude Code-specific prose, though.
 # Requires sbx >= 0.39.0 for sandbox identity and startup commands.
 
 agentInstructions:
@@ -163,7 +164,7 @@ setup:
           MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
           echo "snyk-ads: installing Guard hooks under machine id ${MACHINE_ID}"
           PUSH_KEY="$SNYK_ADS_PUSH_KEY" TENANT_ID="${SNYK_TENANT_ID:-}" MACHINE_ID="$MACHINE_ID" \
-            "$HOME/.local/share/snyk-agent-scan/agent-scan" guard install claude
+            "$HOME/.local/share/snyk-agent-scan/agent-scan" guard install all
         fi
 
     - description: "Install Snyk Studio"
