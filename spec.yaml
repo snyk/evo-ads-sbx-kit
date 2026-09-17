@@ -1,10 +1,11 @@
 schemaVersion: "2"
 kind: mixin
-name: snyk-ads
-displayName: Snyk ADS
-requires:
-  agent: claude
+name: snyk-evo-ads
+displayName: Snyk Evo ADS
 
+# Agent-agnostic: no `requires.agent`. Note that guard install claude below
+# and the agentInstructions content are still Claude Code-specific in
+# practice; genuine multi-agent support needs those generalized too.
 # Requires sbx >= 0.39.0 for sandbox identity and startup commands.
 
 agentInstructions:

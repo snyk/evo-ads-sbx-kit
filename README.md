@@ -1,7 +1,8 @@
 # Snyk ADS Sandbox Kit
 
-An experimental Docker Sandboxes mixin for Claude. The repository contains one
-kit, [`snyk-ads`](./snyk-ads/), requiring **sbx 0.39.0 or later**.
+An experimental Docker Sandboxes mixin, requiring **sbx 0.39.0 or later**. The
+kit's `spec.yaml` and `files/` live at the repository root — there is only one
+kit here, so there's nothing to disambiguate with a subdirectory.
 
 The kit installs whichever Snyk components you request — AgentScan, Agent
 Guard, and/or Snyk Studio — directly from their public release channels. It
@@ -19,7 +20,7 @@ Clone the repository and validate the kit:
 ```bash
 git clone git@github.com:snyk/evo-ads-sbx-kit.git
 cd evo-ads-sbx-kit
-sbx kit validate ./snyk-ads
+sbx kit validate .
 ```
 
 Run the launch commands below from this repository directory. If your network
@@ -31,17 +32,16 @@ before creating the sandbox.
 ```text
 evo-ads-sbx-kit/
 ├── README.md
-├── snyk-ads/
-│   ├── spec.yaml
-│   ├── README.md
-│   └── files/home/
-│       ├── .snyk-kit/   # Component selection, auth, and download helpers
-│       └── corp-ca/     # Optional corporate root certificates
+├── spec.yaml
+├── files/home/
+│   ├── .snyk-kit/   # Component selection, auth, and download helpers
+│   └── corp-ca/     # Optional corporate root certificates
 └── tests/test_auth.py
 ```
 
-Pass the entire `snyk-ads/` directory to `--kit`. Copy that directory when
-vendoring the kit into another project.
+Pass the repository root to `--kit` (or clone it standalone and pass that
+clone's root). Copy `spec.yaml` and `files/` when vendoring the kit into
+another project.
 
 ## Components
 
@@ -71,7 +71,7 @@ error — it does not silently skip the component.
 
 ```bash
 sbx run claude \
-  --kit ./snyk-ads \
+  --kit . \
   --name "$(hostname)-sandbox-free" \
   -e SNYK_TOKEN
 ```
@@ -82,21 +82,21 @@ sbx run claude \
 
 ```bash
 sbx run claude \
-  --kit ./snyk-ads \
+  --kit . \
   --name "$(hostname)-sandbox" \
   -e SNYK_COMPONENTS=scan,guard \
   -e SNYK_ADS_PUSH_KEY
 ```
 
 Guard hooks install directly (no ADS installer involved), so the identity
-Guard reports matches Scan's from the very first install — see
-[Identity and recurring scans](#identity-and-recurring-scans).
+Guard reports matches Scan's — both use
+`docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}` — from the very first install.
 
 ### All three components
 
 ```bash
 sbx run claude \
-  --kit ./snyk-ads \
+  --kit . \
   --name "$(hostname)-sandbox-all" \
   -e SNYK_COMPONENTS=scan,guard,studio \
   -e SNYK_ADS_PUSH_KEY
@@ -106,7 +106,7 @@ sbx run claude \
 
 ```bash
 sbx run claude \
-  --kit ./snyk-ads \
+  --kit . \
   --name "$(hostname)-sandbox-studio" \
   -e SNYK_COMPONENTS=studio
 ```
@@ -134,11 +134,11 @@ and you need to stage its root certificate, below.
 
 ### Staging the corporate CA certificate
 
-Place its PEM-encoded root certificate in `snyk-ads/files/home/corp-ca/` with
+Place its PEM-encoded root certificate in `files/home/corp-ca/` with
 a `.crt` extension — any filename works, the install step globs `*.crt`:
 
 ```text
-snyk-ads/files/home/corp-ca/your-corporate-ca.crt
+files/home/corp-ca/your-corporate-ca.crt
 ```
 
 **macOS, from the system keychain** (replace `"Zscaler Root CA"` with your
@@ -147,7 +147,7 @@ proxy's CA name):
 ```bash
 security find-certificate -a -c "Zscaler Root CA" -p \
   /Library/Keychains/System.keychain \
-  > snyk-ads/files/home/corp-ca/your-corporate-ca.crt
+  > files/home/corp-ca/your-corporate-ca.crt
 ```
 
 **Linux, from the system trust store** (Debian/Ubuntu path shown; RHEL-based
@@ -155,7 +155,7 @@ distros use `/etc/pki/ca-trust/source/anchors/`):
 
 ```bash
 cp /usr/local/share/ca-certificates/your-corporate-ca.crt \
-  snyk-ads/files/home/corp-ca/your-corporate-ca.crt
+  files/home/corp-ca/your-corporate-ca.crt
 ```
 
 **From the live TLS chain**, if you don't have keychain/trust-store access —
@@ -167,18 +167,18 @@ practice:
 ```bash
 openssl s_client -connect downloads.snyk.io:443 -showcerts </dev/null 2>/dev/null \
   | awk '/-----BEGIN CERTIFICATE-----/{buf=""} {buf=buf $0 "\n"} /-----END CERTIFICATE-----/{last=buf} END{printf "%s", last}' \
-  > snyk-ads/files/home/corp-ca/your-corporate-ca.crt
+  > files/home/corp-ca/your-corporate-ca.crt
 ```
 
 Validate before spending a sandbox create on it:
 
 ```bash
-head -1 snyk-ads/files/home/corp-ca/*.crt        # must read BEGIN CERTIFICATE
-openssl x509 -in snyk-ads/files/home/corp-ca/your-corporate-ca.crt -noout -text \
+head -1 files/home/corp-ca/*.crt        # must read BEGIN CERTIFICATE
+openssl x509 -in files/home/corp-ca/your-corporate-ca.crt -noout -text \
   | grep -A1 'Basic Constraints'                 # must read CA:TRUE
 ```
 
-See the [certificate guide](./snyk-ads/files/home/corp-ca/README.md) for the
+See the [certificate guide](./files/home/corp-ca/README.md) for the
 full set of rules (PEM vs DER, root vs leaf, gitignore behavior). The kit
 adds certificates to the system trust store and sets Node's additional CA
 bundle. Missing certificates do not themselves abort setup, but intercepted
@@ -212,7 +212,7 @@ consent is preserved for interactive scans.
 ## Verification and troubleshooting
 
 ```bash
-sbx kit validate ./snyk-ads
+sbx kit validate .
 sbx exec "<sandbox-name>" sh -c 'sh "$HOME/.snyk-kit/resolve-components.sh"'
 sbx exec "<sandbox-name>" sh -c 'cat "$HOME/.snyk/agent-scan-startup.log"'
 ```

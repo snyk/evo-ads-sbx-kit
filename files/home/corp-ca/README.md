@@ -4,7 +4,7 @@ Every `*.crt` file in this directory is installed into the sandbox's system trus
 before the Snyk downloads below run.
 
 ```
-snyk-ads/files/home/corp-ca/zscaler-root-ca.crt   →   /home/agent/corp-ca/zscaler-root-ca.crt
+files/home/corp-ca/zscaler-root-ca.crt   →   /home/agent/corp-ca/zscaler-root-ca.crt
 ```
 
 Drop in as many certs as your proxy chain needs. You do not edit `spec.yaml` to add one —
@@ -20,11 +20,11 @@ macOS, Zscaler, from the System keychain:
 ```bash
 security find-certificate -a -c "Zscaler Root CA" -p \
   /Library/Keychains/System.keychain \
-  > snyk-ads/files/home/corp-ca/zscaler-root-ca.crt
+  > files/home/corp-ca/zscaler-root-ca.crt
 ```
 
 Other export routes — Linux paths, and pulling the root out of the live TLS chain — are in
-the [repo README](../../../../README.md#staging-the-corporate-ca-certificate), along with a
+the [repo README](../../../README.md#staging-the-corporate-ca-certificate), along with a
 one-liner to check whether you need a cert at all before assuming either way.
 
 ## Four rules
@@ -39,8 +39,8 @@ one-liner to check whether you need a cert at all before assuming either way.
 ## Check before you spend a sandbox create
 
 ```bash
-head -1 snyk-ads/files/home/corp-ca/*.crt        # must be BEGIN CERTIFICATE
-openssl x509 -in snyk-ads/files/home/corp-ca/your-ca.crt -noout -text \
+head -1 files/home/corp-ca/*.crt        # must be BEGIN CERTIFICATE
+openssl x509 -in files/home/corp-ca/your-ca.crt -noout -text \
   | grep -A1 'Basic Constraints'                 # CA:TRUE
 ```
 
@@ -52,7 +52,7 @@ A corporate root CA is a public key, not a secret, so committing one to share wi
 is usually fine. If that's what you want, force-add it and check your org's policy first:
 
 ```bash
-git add -f snyk-ads/files/home/corp-ca/zscaler-root-ca.crt
+git add -f files/home/corp-ca/zscaler-root-ca.crt
 ```
 
 Requires `sbx` 0.38.0 or later — that's when `files/` staging landed. The

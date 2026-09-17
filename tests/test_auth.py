@@ -8,7 +8,6 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-KIT = 'snyk-ads'
 
 
 def _dedent_block(after_pipe):
@@ -33,7 +32,7 @@ def _dedent_block(after_pipe):
 
 def extract_step(description):
     """Return the dedented `command` body of the install/startup step named `description`."""
-    text = (ROOT / KIT / 'spec.yaml').read_text()
+    text = (ROOT / 'spec.yaml').read_text()
     marker = f'description: "{description}"\n'
     idx = text.index(marker)
     rest = text[idx + len(marker):]
@@ -48,7 +47,7 @@ class KitTestCase(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name)
-        shutil.copytree(ROOT / KIT / 'files/home/.snyk-kit', self.home / '.snyk-kit')
+        shutil.copytree(ROOT / 'files/home/.snyk-kit', self.home / '.snyk-kit')
         self.bin = self.home / 'bin'
         self.bin.mkdir()
         self.env = {
