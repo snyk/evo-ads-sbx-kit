@@ -132,14 +132,6 @@ sbx run claude \
   -e SNYK_API=https://api.example-region.snyk.io
 ```
 
-`permissions.network.allow` in `spec.yaml` allow-lists `**.snyk.io` (any
-host under `snyk.io`, at any subdomain depth), so a `SNYK_API` host under
-`snyk.io` (as in the example above) needs no extra setup. A host outside
-`snyk.io` isn't reachable until you also run
-`sbx policy allow network <host>` (optionally scoped with
-`--sandbox <name>`) before creating the sandbox — otherwise the sandbox's
-network policy blocks it regardless of what `SNYK_API` says.
-
 ## Corporate certificates and network access
 
 ### Do you even need this?
@@ -210,8 +202,9 @@ downloads may fail without them.
 
 ### Network allowlist
 
-The kit allows `downloads.snyk.io`, `api.snyk.io`, `deeproxy.snyk.io`,
-`evo.snyk.io`, `app.snyk.io`, `registry.npmjs.org`, `github.com`, and
+The kit allows `**.snyk.io` (any host under `snyk.io`, any subdomain depth —
+covers `api.snyk.io`, `deeproxy.snyk.io`, `downloads.snyk.io`, and a custom
+`SNYK_API` host), plus `registry.npmjs.org`, `github.com`, and
 `release-assets.githubusercontent.com`. Snyk Code (SAST) needs access to
 `deeproxy.snyk.io`; AgentScan, Guard, and Studio binaries download from
 `github.com`/`release-assets.githubusercontent.com`. Organization policy may
