@@ -11,8 +11,11 @@ MIIE6DCCA9CgAwIBAgIJANu+mC2Jt3uTMA0GCSqGSIb3DQEBCwUAMIGhMQswCQYD
 QSBSb290IENBMB4XDTE0MTIwODE5NDMwNFoXDTQyMTIwMTE5NDMwNFowgaExCzAJ
 -----END CERTIFICATE-----
 
-Multiple PEM blocks in one file are fine if your proxy chain needs them — concatenate
-them, root last.
+If your proxy chain needs more than one certificate, put each one in its own .crt
+file rather than concatenating them into one. update-ca-certificates indexes each
+staged file by its own hash for directory-style (CApath) lookups; a concatenated
+file only gets indexed under one hash, so tools that verify via CApath instead of
+the combined CAfile bundle can fail to discover the other certs in it.
 
 Common mistakes this format check catches:
 

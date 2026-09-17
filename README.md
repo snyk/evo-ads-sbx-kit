@@ -48,7 +48,7 @@ another project.
 Select what to install with `SNYK_COMPONENTS`, a comma-separated list of
 `scan`, `guard`, and/or `studio`. It defaults to `scan` when omitted.
 
-| Component | Credential required | Notes |
+| Component | Credential to activate | Notes |
 | --- | --- | --- |
 | `scan` (AgentScan) | `SNYK_TOKEN`, or `SNYK_ADS_PUSH_KEY` | Free-tier with a token, or enterprise upload with a push key |
 | `guard` (Agent Guard) | `SNYK_ADS_PUSH_KEY` | `SNYK_TENANT_ID` is optional — Agent Guard only needs it for the interactive push-key-minting flow this kit never uses |
@@ -63,9 +63,11 @@ separate binary from
 downloaded and verified the same way.
 
 Credentials are supplied explicitly with `-e`. The kit does not declare
-credential defaults or import host variables. Requesting a component without
-its required credential fails sandbox creation immediately, with a clear
-error — it does not silently skip the component.
+credential defaults or import host variables. Install steps run
+unconditionally — the binaries are public and need no credential to
+install. Requesting `scan` or `guard` without its credential still installs
+the binary, but the corresponding hooks stay inactive (logged, not an
+error) until a credential is set and the sandbox is recreated.
 
 ### Default: free-tier AgentScan
 
@@ -237,15 +239,17 @@ sbx exec "<sandbox-name>" sh -c 'cat "$HOME/.snyk/agent-scan-startup.log"'
 Replace `<sandbox-name>` with the name passed at creation.
 
 `resolve-components.sh` prints `scan=0|1 guard=0|1 studio=0|1
-auth_mode=enterprise|standalone|none` and fails with a specific error if a
-requested component is missing its required credential. AgentScan and Guard
-always share `~/.local/share/snyk-agent-scan/agent-scan`; Studio's binary is
-at `~/.local/share/snyk-studio/snyk-studio-installer`.
+auth_mode=enterprise|standalone|none` and fails only if `SNYK_COMPONENTS`
+itself is malformed (an unknown component, or a value that resolves to
+none). AgentScan and Guard always share
+`~/.local/share/snyk-agent-scan/agent-scan`; Studio's binary is at
+`~/.local/share/snyk-studio/snyk-studio-installer`.
 
 | Symptom | Check |
 | --- | --- |
 | TLS download failure, curl 60/77 | Corporate root certificate and system trust store |
 | Connection failure, curl 6/7 | DNS, proxy, and organization network policy |
-| Sandbox creation fails immediately with a `snyk-ads: ERROR` | Which component was requested and which credential it needs (see [Components](#components)) |
+| Sandbox creation fails immediately with a `snyk-ads: ERROR` | `SNYK_COMPONENTS` itself — an unknown component name, or a value that resolves to none (see [Components](#components)) |
+| Binary installed but scan/guard hooks inactive | Missing credential for that component — install logs say so; set it and recreate the sandbox |
 | No Scan binary | Whether `scan` was actually requested in `SNYK_COMPONENTS` |
 | No recurring output | Startup log and sbx version |
