@@ -1,10 +1,12 @@
 schemaVersion: "2"
 kind: mixin
-name: snyk-ads
-displayName: Snyk ADS
-requires:
-  agent: claude
+name: snyk-evo-ads
+displayName: Snyk Evo ADS
 
+# Agent-agnostic: no `requires.agent`. guard install all (below) installs
+# hooks for whichever of claude/cursor/codex is actually present, skipping
+# the rest with a warning rather than erroring. agentInstructions content is
+# still Claude Code-specific prose, though.
 # Requires sbx >= 0.39.0 for sandbox identity and startup commands.
 
 agentInstructions:
@@ -27,6 +29,13 @@ agentInstructions:
     adding `--push-key "$SNYK_ADS_PUSH_KEY"` in enterprise mode (auth_mode from
     resolve-components.sh). Expand the key in the shell; never copy its value
     into commands or responses.
+
+    An optional SNYK_API overrides the Snyk API base URL (default
+    https://api.snyk.io). The kit passes it to Guard install as --url, and to
+    Scan as --analysis-url with the same path AgentScan uses by default
+    (only the host changes). This kit's network allowlist covers any host
+    under snyk.io (any subdomain depth), so a SNYK_API host under snyk.io
+    works with no extra setup. 
 
     AgentScan authentication is separate from Snyk CLI authentication. Do not
     require `snyk auth` for AgentScan; it uses the supplied SNYK_TOKEN or
@@ -69,16 +78,11 @@ environment:
   variables:
     # Extend Node’s trust store with the system CA bundle.
     NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt"
-    USER: "$SANDBOX_USER"
 
 permissions:
   network:
     allow:
-      - downloads.snyk.io
-      - api.snyk.io
-      - deeproxy.snyk.io
-      - evo.snyk.io
-      - app.snyk.io
+      - "**.snyk.io"
       - registry.npmjs.org
       - github.com
       - release-assets.githubusercontent.com
@@ -161,8 +165,24 @@ setup:
           : "${SANDBOX_ID:?SANDBOX_ID is required}"
           MACHINE_ID="docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}"
           echo "snyk-ads: installing Guard hooks under machine id ${MACHINE_ID}"
+          set -- guard install all
+          if [ -n "${SNYK_API:-}" ]; then
+            echo "snyk-ads: using Snyk API base ${SNYK_API}"
+            set -- "$@" --url "$SNYK_API"
+          fi
+          set +e
           PUSH_KEY="$SNYK_ADS_PUSH_KEY" TENANT_ID="${SNYK_TENANT_ID:-}" MACHINE_ID="$MACHINE_ID" \
-            "$HOME/.local/share/snyk-agent-scan/agent-scan" guard install claude
+            "$HOME/.local/share/snyk-agent-scan/agent-scan" "$@"
+          rc=$?
+          set -e
+          if [ "$rc" != 0 ]; then
+            if [ -n "${SNYK_API:-}" ]; then
+              echo "snyk-ads: ERROR guard install failed (exit $rc) against SNYK_API=${SNYK_API}. Guard install sends a test event to \${SNYK_API}/hidden/agent-monitor/hooks/<client> after copying hooks; a 404 there means that host doesn't serve Guard's backend routes for this push key/tenant, not a kit or network-policy problem. Verify SNYK_API points at a full Snyk API deployment with Guard enabled, and that SNYK_ADS_PUSH_KEY is valid for it." >&2
+            else
+              echo "snyk-ads: ERROR guard install failed (exit $rc)." >&2
+            fi
+            exit "$rc"
+          fi
         fi
 
     - description: "Install Snyk Studio"
@@ -243,6 +263,10 @@ setup:
           SCAN_ARGS=(scan --machine-id "$MACHINE_ID")
           if [ "$auth_mode" = enterprise ]; then
             SCAN_ARGS+=(--push-key "$SNYK_ADS_PUSH_KEY")
+          fi
+          if [ -n "${SNYK_API:-}" ]; then
+            echo "agent-scan: using Snyk API base ${SNYK_API}"
+            SCAN_ARGS+=(--analysis-url "${SNYK_API}/hidden/mcp-scan/analysis-machine?version=2026-07-10")
           fi
 
           # Wait 15 minutes after each attempt; scans run sequentially.

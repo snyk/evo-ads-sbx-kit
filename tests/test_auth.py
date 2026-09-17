@@ -8,7 +8,6 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-KIT = 'snyk-ads'
 
 
 def _dedent_block(after_pipe):
@@ -33,7 +32,7 @@ def _dedent_block(after_pipe):
 
 def extract_step(description):
     """Return the dedented `command` body of the install/startup step named `description`."""
-    text = (ROOT / KIT / 'spec.yaml').read_text()
+    text = (ROOT / 'spec.yaml').read_text()
     marker = f'description: "{description}"\n'
     idx = text.index(marker)
     rest = text[idx + len(marker):]
@@ -48,7 +47,7 @@ class KitTestCase(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name)
-        shutil.copytree(ROOT / KIT / 'files/home/.snyk-kit', self.home / '.snyk-kit')
+        shutil.copytree(ROOT / 'files/home/.snyk-kit', self.home / '.snyk-kit')
         self.bin = self.home / 'bin'
         self.bin.mkdir()
         self.env = {
@@ -267,7 +266,7 @@ cat > "$1" <<'SCAN'
 #!/bin/sh
 printf '%s\\n' "$*" >> "$HOME/guard-invocations"
 printf 'env PUSH_KEY=%s TENANT_ID=%s MACHINE_ID=%s\\n' "$PUSH_KEY" "$TENANT_ID" "$MACHINE_ID" >> "$HOME/guard-invocations"
-exit 0
+exit "${MOCK_GUARD_RC:-0}"
 SCAN
 ''')
         self.executable('sha256sum', 'cat > "$HOME/checksum"; exit 0\n')
@@ -292,7 +291,7 @@ SCAN
         result = self.run_step(SNYK_COMPONENTS='scan,guard', SNYK_ADS_PUSH_KEY='push-key-value')
         self.assertEqual(result.returncode, 0, result.stderr)
         invocations = (self.home / 'guard-invocations').read_text()
-        self.assertIn('guard install claude', invocations)
+        self.assertIn('guard install all', invocations)
         self.assertIn('env PUSH_KEY=push-key-value TENANT_ID= MACHINE_ID=docker-sbx:test:123', invocations)
 
     def test_guard_forwards_tenant_id_when_supplied(self):
@@ -307,6 +306,34 @@ SCAN
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('guard requires SNYK_ADS_PUSH_KEY', result.stderr)
         self.assertFalse((self.home / '.local/share/snyk-agent-scan/agent-scan').exists())
+
+    def test_guard_forwards_custom_snyk_api_as_url_flag(self):
+        result = self.run_step(SNYK_COMPONENTS='guard', SNYK_ADS_PUSH_KEY='push-key-value',
+                                SNYK_API='https://api.example-region.snyk.io')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        invocations = (self.home / 'guard-invocations').read_text()
+        self.assertIn('guard install all --url https://api.example-region.snyk.io', invocations)
+
+    def test_guard_omits_url_flag_when_snyk_api_unset(self):
+        result = self.run_step(SNYK_COMPONENTS='guard', SNYK_ADS_PUSH_KEY='push-key-value')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        invocations = (self.home / 'guard-invocations').read_text()
+        self.assertNotIn('--url', invocations)
+
+    def test_guard_install_failure_with_custom_snyk_api_explains_test_event(self):
+        result = self.run_step(SNYK_COMPONENTS='guard', SNYK_ADS_PUSH_KEY='push-key-value',
+                                SNYK_API='https://api.pc01.my.snyk.io', MOCK_GUARD_RC='1')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('guard install failed', result.stderr)
+        self.assertIn('https://api.pc01.my.snyk.io', result.stderr)
+        self.assertIn('hidden/agent-monitor/hooks', result.stderr)
+
+    def test_guard_install_failure_without_custom_snyk_api_is_terse(self):
+        result = self.run_step(SNYK_COMPONENTS='guard', SNYK_ADS_PUSH_KEY='push-key-value',
+                                MOCK_GUARD_RC='1')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('guard install failed', result.stderr)
+        self.assertNotIn('hidden/agent-monitor/hooks', result.stderr)
 
 
 class InstallStudioStepTests(KitTestCase):
@@ -376,7 +403,29 @@ sleep() { [ "$1" = 900 ] || exit 99; wait=$((wait+1)); [ "$wait" -lt 2 ]; }
                 scans = [line for line in result.stdout.splitlines() if line.startswith('scan:')]
                 self.assertEqual(len(scans), 2)
                 self.assertEqual('--push-key test-key' in scans[0], expects_push_key)
+                self.assertNotIn('--analysis-url', scans[0])
                 self.assertIn('exited non-zero', result.stdout)
+
+    def test_scan_forwards_custom_snyk_api_as_analysis_url(self):
+        text = extract_step('Upload Snyk agent-scan inventory every 15 minutes')
+        tail = text[text.index('SCAN_ARGS=(scan'):]
+        prefix = '''SCAN=mock_scan
+MACHINE_ID=docker-sbx:test:123
+attempt=0
+wait=0
+mock_scan() { attempt=$((attempt+1)); echo "scan:$*"; [ "$attempt" -gt 1 ]; }
+sleep() { [ "$1" = 900 ] || exit 99; wait=$((wait+1)); [ "$wait" -lt 2 ]; }
+'''
+        result = subprocess.run(
+            ['bash', '-c', prefix + tail],
+            env={**self.env, 'auth_mode': 'standalone',
+                 'SNYK_API': 'https://api.example-region.snyk.io'},
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        scans = [line for line in result.stdout.splitlines() if line.startswith('scan:')]
+        self.assertIn(
+            '--analysis-url https://api.example-region.snyk.io/hidden/mcp-scan/analysis-machine?version=2026-07-10',
+            scans[0])
 
 
 if __name__ == '__main__':
