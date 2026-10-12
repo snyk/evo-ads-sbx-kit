@@ -18,19 +18,19 @@ configuration: what gets installed is exactly what you ask for.
 Add the mixin to a built-in agent. With a local clone of this repo:
 
 ```bash
-sbx run claude --kit ./snyk-evo-ads/
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit ./snyk-evo-ads/
 ```
 
 Or directly from the repo, without cloning:
 
 ```bash
-sbx run claude --kit "git+https://github.com/docker/sbx-kits-contrib.git#dir=snyk-evo-ads"
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit "git+https://github.com/docker/sbx-kits-contrib.git#dir=snyk-evo-ads"
 ```
 
 Or use the published v3 kit:
 
 ```bash
-sbx run claude --kit "docker.io/sbx/snyk-evo-ads:latest"
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit "docker.io/sbx/snyk-evo-ads:latest"
 ```
 
 If your network uses TLS interception, [stage your corporate root
@@ -45,9 +45,10 @@ snyk-evo-ads/
 ├── snyk-evo-ads.yaml
 ├── snyk-evo-ads.dockerfile
 ├── snyk-evo-ads-context.md
-└── files/home/
-    ├── .snyk-kit/   # Component selection, auth, and download helpers
-    └── corp-ca/     # Optional corporate root certificates
+├── files/home/
+│   ├── .snyk-kit/   # Component selection, auth, and download helpers
+│   └── corp-ca/     # Optional corporate root certificates
+└── tests/           # Offline unit tests and Docker CA trust-store checks
 ```
 
 ## Components
@@ -79,7 +80,7 @@ error) until a credential is set and the sandbox is recreated.
 ### Default: free-tier AgentScan
 
 ```bash
-sbx run claude \
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
   --kit ./snyk-evo-ads/ \
   --name "$(hostname)-sandbox-free" \
   -e SNYK_TOKEN
@@ -90,7 +91,7 @@ sbx run claude \
 ### AgentScan + Agent Guard
 
 ```bash
-sbx run claude \
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
   --kit ./snyk-evo-ads/ \
   --name "$(hostname)-sandbox" \
   -e SNYK_COMPONENTS=scan,guard \
@@ -104,7 +105,7 @@ install.
 ### All three components
 
 ```bash
-sbx run claude \
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
   --kit ./snyk-evo-ads/ \
   --name "$(hostname)-sandbox-all" \
   -e SNYK_COMPONENTS=scan,guard,studio \
@@ -114,7 +115,7 @@ sbx run claude \
 ### Studio alone
 
 ```bash
-sbx run claude \
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
   --kit ./snyk-evo-ads/ \
   --name "$(hostname)-sandbox-studio" \
   -e SNYK_COMPONENTS=studio
@@ -133,7 +134,7 @@ point them at a different Snyk API base instead — the kit passes it to
 path AgentScan uses by default (only the host changes):
 
 ```bash
-sbx run claude \
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
   --kit ./snyk-evo-ads/ \
   --name "$(hostname)-sandbox" \
   -e SNYK_COMPONENTS=scan,guard \
@@ -159,55 +160,41 @@ and you need to stage its root certificate, below.
 
 ### Staging the corporate CA certificate
 
-Place its PEM-encoded root certificate in `files/home/corp-ca/` with
-a `.crt` extension — any filename works, the install step globs `*.crt`:
-
-```text
-files/home/corp-ca/your-corporate-ca.crt
-```
+Pass the root CA's PEM text with `-e SNYK_CORP_CA_PEM` when creating a
+sandbox with the published kit — no local kit changes needed. A root CA
+is public, not a secret; never pass its private key. One or more PEM
+certificates are supported.
 
 **macOS, from the system keychain** (replace `"Zscaler Root CA"` with your
 proxy's CA name):
 
 ```bash
-security find-certificate -a -c "Zscaler Root CA" -p \
-  /Library/Keychains/System.keychain \
-  > files/home/corp-ca/your-corporate-ca.crt
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit docker.io/sbx/snyk-evo-ads:latest \
+  -e SNYK_CORP_CA_PEM="$(security find-certificate -a -c "Zscaler Root CA" -p /Library/Keychains/System.keychain)" \
+  -e SNYK_TOKEN
 ```
 
-**Linux, from the system trust store** (Debian/Ubuntu path shown; RHEL-based
-distros use `/etc/pki/ca-trust/source/anchors/`):
+**Linux, from a PEM file**:
 
 ```bash
-cp /usr/local/share/ca-certificates/your-corporate-ca.crt \
-  files/home/corp-ca/your-corporate-ca.crt
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit docker.io/sbx/snyk-evo-ads:latest \
+  -e SNYK_CORP_CA_PEM="$(cat /path/to/ca.pem)" \
+  -e SNYK_TOKEN
 ```
 
-**From the live TLS chain**, if you don't have keychain/trust-store access —
-this pulls the topmost certificate your proxy actually presents, which is
-usually an intermediate rather than a true self-signed root (proxies
-typically don't serve their root), but is sufficient as a trust anchor in
-practice:
+Add the same flag to any launch command above, including `--kit .`.
+Certificates are installed at sandbox creation; **recreate an existing
+sandbox** to apply changes. The kit splits multi-cert PEM into individual
+`.crt` files, normalizes CRLF, updates the system trust store, and extends
+Node's CA bundle. Incomplete or non-PEM input fails installation. The
+`lifecycle@1` CA install hook explicitly allows `SNYK_CORP_CA_PEM` in its
+`env` list; v3 hooks otherwise deny environment variables by default.
+Missing certificates warn and continue, but intercepted downloads may fail.
 
-```bash
-openssl s_client -connect downloads.snyk.io:443 -showcerts </dev/null 2>/dev/null \
-  | awk '/-----BEGIN CERTIFICATE-----/{buf=""} {buf=buf $0 "\n"} /-----END CERTIFICATE-----/{last=buf} END{printf "%s", last}' \
-  > files/home/corp-ca/your-corporate-ca.crt
-```
-
-Validate before spending a sandbox create on it:
-
-```bash
-head -1 files/home/corp-ca/*.crt        # must read BEGIN CERTIFICATE
-openssl x509 -in files/home/corp-ca/your-corporate-ca.crt -noout -text \
-  | grep -A1 'Basic Constraints'                 # must read CA:TRUE
-```
-
-See the [certificate guide](./files/home/corp-ca/README.md) for the
-full set of rules (PEM vs DER, root vs leaf, gitignore behavior). The kit
-adds certificates to the system trust store and sets Node's additional CA
-bundle. Missing certificates do not themselves abort setup, but intercepted
-downloads may fail without them.
+For a local checkout, placing one PEM certificate per `.crt` file in
+`files/home/corp-ca/` still works alongside the environment variable.
+See the [certificate guide](./files/home/corp-ca/README.md) for format and
+validation rules.
 
 ### Network allowlist
 
@@ -254,7 +241,7 @@ none). AgentScan and Guard always share
 
 | Symptom | Check |
 | --- | --- |
-| TLS download failure, curl 60/77 | Corporate root certificate and system trust store |
+| TLS download failure, curl 60/77 | Pass the corporate root PEM with `-e SNYK_CORP_CA_PEM="$(cat /path/to/ca.pem)"` and recreate the sandbox; see [corporate certificates](#staging-the-corporate-ca-certificate) |
 | Connection failure, curl 6/7 | DNS, proxy, and organization network policy |
 | Sandbox creation fails immediately with a `snyk-ads: ERROR` | `SNYK_COMPONENTS` itself — an unknown component name, or a value that resolves to none (see [Components](#components)) |
 | Binary installed but scan/guard hooks inactive | Missing credential for that component — install logs say so; set it and recreate the sandbox |
