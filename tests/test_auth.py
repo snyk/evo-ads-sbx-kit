@@ -34,7 +34,7 @@ def _dedent_block(after_pipe):
 
 def extract_step(description):
     """Return the command body of the install/startup step named `description`."""
-    text = (ROOT / 'spec.yaml').read_text()
+    text = (ROOT / 'snyk-evo-ads.yaml').read_text()
     marker = f'description: "{description}"\n'
     idx = text.index(marker)
     rest = text[idx + len(marker):]

@@ -23,6 +23,9 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Python test cache
+__pycache__/
+
 # Local scratch
 *.bak
 *.bak.yaml
