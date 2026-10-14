@@ -13,9 +13,26 @@ and runs AgentScan at startup and after a 15-minute pause between attempts.
 There is no dependency on Snyk-internal infrastructure or any tenant-side
 configuration: what gets installed is exactly what you ask for.
 
+## Quick Start
+
+Use the published v3 kit with your agent:
+
+```bash
+sbx run <agent> --kit sbx/snyk-evo-ads:latest
+```
+
+Credentials are supplied explicitly with `-e`: add `-e SNYK_TOKEN` for
+free-tier AgentScan, or `-e SNYK_ADS_PUSH_KEY` for enterprise Scan/Guard.
+Select what to install with `-e SNYK_COMPONENTS=scan,guard,studio`, a
+comma-separated list of `scan`, `guard`, and/or `studio`; it defaults to
+`scan` when omitted. See [Components](#components) for details.
+
+**Note:** `sbx/snyk-evo-ads-kit` on Docker Hub is the older Sandbox Kit v2
+build; this repo (v3) is published as `sbx/snyk-evo-ads`.
+
 ## Getting started
 
-Add the mixin to a built-in agent. With a local clone of this repo:
+For a local clone of this repo:
 
 ```bash
 sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit ./snyk-evo-ads/
@@ -30,7 +47,7 @@ sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit "git+https://github.com/do
 Or use the published v3 kit:
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit "docker.io/sbx/snyk-evo-ads:latest"
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit sbx/snyk-evo-ads:latest
 ```
 
 If your network uses TLS interception, [stage your corporate root
@@ -169,7 +186,7 @@ certificates are supported.
 proxy's CA name):
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit docker.io/sbx/snyk-evo-ads:latest \
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit sbx/snyk-evo-ads:latest \
   -e SNYK_CORP_CA_PEM="$(security find-certificate -a -c "Zscaler Root CA" -p /Library/Keychains/System.keychain)" \
   -e SNYK_TOKEN
 ```
@@ -177,7 +194,7 @@ sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit docker.io/sbx/snyk-evo-ads
 **Linux, from a PEM file**:
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit docker.io/sbx/snyk-evo-ads:latest \
+sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit sbx/snyk-evo-ads:latest \
   -e SNYK_CORP_CA_PEM="$(cat /path/to/ca.pem)" \
   -e SNYK_TOKEN
 ```
