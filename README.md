@@ -30,25 +30,14 @@ comma-separated list of `scan`, `guard`, and/or `studio`; it defaults to
 **Note:** `sbx/snyk-evo-ads-kit` on Docker Hub is the older Sandbox Kit v2
 build; this repo (v3) is published as `sbx/snyk-evo-ads`.
 
-## Getting started
-
-For a local clone of this repo:
+## Running from a local clone
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit ./snyk-evo-ads/
+git clone https://github.com/snyk/evo-ads-sbx-kit.git && cd evo-ads-sbx-kit
+sbx run <agent> --kit "$PWD"
 ```
 
-Or directly from the repo, without cloning:
-
-```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit "git+https://github.com/docker/sbx-kits-contrib.git#dir=snyk-evo-ads"
-```
-
-Or use the published v3 kit:
-
-```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit sbx/snyk-evo-ads:latest
-```
+`sbx run` rejects a bare `--kit .`, so pass the absolute path as above.
 
 If your network uses TLS interception, [stage your corporate root
 certificate](#staging-the-corporate-ca-certificate) before creating the
@@ -98,7 +87,7 @@ error) until a credential is set and the sandbox is recreated.
 
 ```bash
 sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
-  --kit ./snyk-evo-ads/ \
+  --kit "$PWD" \
   --name "$(hostname)-sandbox-free" \
   -e SNYK_TOKEN
 ```
@@ -109,7 +98,7 @@ sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
 
 ```bash
 sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
-  --kit ./snyk-evo-ads/ \
+  --kit "$PWD" \
   --name "$(hostname)-sandbox" \
   -e SNYK_COMPONENTS=scan,guard \
   -e SNYK_ADS_PUSH_KEY
@@ -123,7 +112,7 @@ install.
 
 ```bash
 sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
-  --kit ./snyk-evo-ads/ \
+  --kit "$PWD" \
   --name "$(hostname)-sandbox-all" \
   -e SNYK_COMPONENTS=scan,guard,studio \
   -e SNYK_ADS_PUSH_KEY
@@ -133,7 +122,7 @@ sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
 
 ```bash
 sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
-  --kit ./snyk-evo-ads/ \
+  --kit "$PWD" \
   --name "$(hostname)-sandbox-studio" \
   -e SNYK_COMPONENTS=studio
 ```
@@ -152,7 +141,7 @@ path AgentScan uses by default (only the host changes):
 
 ```bash
 sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
-  --kit ./snyk-evo-ads/ \
+  --kit "$PWD" \
   --name "$(hostname)-sandbox" \
   -e SNYK_COMPONENTS=scan,guard \
   -e SNYK_ADS_PUSH_KEY \
@@ -199,7 +188,7 @@ sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit sbx/snyk-evo-ads:latest \
   -e SNYK_TOKEN
 ```
 
-Add the same flag to any launch command above, including `--kit .`.
+Add the same flag to any launch command above, including `--kit "$PWD"`.
 Certificates are installed at sandbox creation; **recreate an existing
 sandbox** to apply changes. The kit splits multi-cert PEM into individual
 `.crt` files, normalizes CRLF, updates the system trust store, and extends
