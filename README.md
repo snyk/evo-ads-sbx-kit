@@ -5,7 +5,9 @@
 
 # snyk-evo-ads
 
-A Docker Sandboxes mixin (`kind: mixin`), requiring **sbx 0.39.0 or later**.
+A Docker Sandboxes mixin (`kind: mixin`), requiring **sbx 0.53.0 or later**.
+Earlier releases fail to run the `sbx/claude` agent kit used in the examples
+below (`agent "claude" is already registered`).
 The kit installs whichever Snyk components you request — Agent Scan, Agent
 Guard, and/or Snyk Studio — directly from their public release channels. It
 stages optional corporate certificates, installs the requested components,
@@ -22,7 +24,7 @@ sbx run <agent> --kit sbx/snyk-evo-ads:latest
 ```
 
 Credentials are supplied explicitly with `-e`: add `-e SNYK_TOKEN` for
-free-tier AgentScan, or `-e SNYK_ADS_PUSH_KEY` for enterprise Scan/Guard.
+free-tier Agent Scan, or `-e SNYK_ADS_PUSH_KEY` for enterprise Agent Scan / Agent Guard.
 Select what to install with `-e SNYK_COMPONENTS=scan,guard,studio`, a
 comma-separated list of `scan`, `guard`, and/or `studio`; it defaults to
 `scan` when omitted. See [Components](#components) for details.
@@ -83,10 +85,16 @@ install. Requesting `scan` or `guard` without its credential still installs
 the binary, but the corresponding hooks stay inactive (logged, not an
 error) until a credential is set and the sandbox is recreated.
 
+`-e SNYK_TOKEN` with no value passes through the value already exported in
+your host shell. If the variable isn't exported, nothing reaches the sandbox.
+Export it first (`export SNYK_TOKEN=...`, or from a secrets manager such as
+`export SNYK_TOKEN="$(op read ...)"`), or pass it explicitly with
+`-e SNYK_TOKEN="$SNYK_TOKEN"`. The same applies to `SNYK_ADS_PUSH_KEY`.
+
 ### Default: free-tier Agent Scan
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
+sbx run docker.io/sbx/claude:2.1.267 \
   --kit "$PWD" \
   --name "$(hostname)-sandbox-free" \
   -e SNYK_TOKEN
@@ -97,21 +105,21 @@ sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
 ### Agent Scan + Agent Guard
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
+sbx run docker.io/sbx/claude:2.1.267 \
   --kit "$PWD" \
   --name "$(hostname)-sandbox" \
   -e SNYK_COMPONENTS=scan,guard \
   -e SNYK_ADS_PUSH_KEY
 ```
 
-Agent Guard hooks install directly, so the identity Guard reports matches Scan's
+Agent Guard hooks install directly, so the identity Agent Guard reports matches Agent Scan's
 — both use `docker-sbx:${SANDBOX_NAME}:${SANDBOX_ID}` — from the very first
 install.
 
 ### All three components
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
+sbx run docker.io/sbx/claude:2.1.267 \
   --kit "$PWD" \
   --name "$(hostname)-sandbox-all" \
   -e SNYK_COMPONENTS=scan,guard,studio \
@@ -121,7 +129,7 @@ sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
 ### Studio alone
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
+sbx run docker.io/sbx/claude:2.1.267 \
   --kit "$PWD" \
   --name "$(hostname)-sandbox-studio" \
   -e SNYK_COMPONENTS=studio
@@ -140,7 +148,7 @@ point them at a different Snyk API base instead — the kit passes it to
 path Agent Scan uses by default (only the host changes):
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 \
+sbx run docker.io/sbx/claude:2.1.267 \
   --kit "$PWD" \
   --name "$(hostname)-sandbox" \
   -e SNYK_COMPONENTS=scan,guard \
@@ -175,7 +183,7 @@ certificates are supported.
 proxy's CA name):
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit sbx/snyk-evo-ads:latest \
+sbx run docker.io/sbx/claude:2.1.267 --kit sbx/snyk-evo-ads:latest \
   -e SNYK_CORP_CA_PEM="$(security find-certificate -a -c "Zscaler Root CA" -p /Library/Keychains/System.keychain)" \
   -e SNYK_TOKEN
 ```
@@ -183,7 +191,7 @@ sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit sbx/snyk-evo-ads:latest \
 **Linux, from a PEM file**:
 
 ```bash
-sbx run docker.io/docker/sbx-kit-claude:2.1.267 --kit sbx/snyk-evo-ads:latest \
+sbx run docker.io/sbx/claude:2.1.267 --kit sbx/snyk-evo-ads:latest \
   -e SNYK_CORP_CA_PEM="$(cat /path/to/ca.pem)" \
   -e SNYK_TOKEN
 ```
@@ -228,6 +236,13 @@ Background results are logged rather than inserted into an existing conversation
 Enterprise background scans can submit asynchronous analysis to Snyk. MCP execution
 consent is preserved for interactive scans.
 
+**Known limitation: MCP servers behind the sandbox MCP gateway.** MCP servers
+added with `sbx mcp add` / `sbx mcp load` reach the agent through the
+sandbox's `mcp-gateway` entry. Agent Scan can't start that gateway (it reports
+`X001`), so the tools behind it aren't inspected and those servers don't
+appear in Evo. MCP servers and skills configured directly in the agent's own
+config are scanned as usual.
+
 ## Verification and troubleshooting
 
 ```bash
@@ -250,6 +265,6 @@ none). Agent Scan and Agent Guard always share
 | TLS download failure, curl 60/77 | Pass the corporate root PEM with `-e SNYK_CORP_CA_PEM="$(cat /path/to/ca.pem)"` and recreate the sandbox; see [corporate certificates](#staging-the-corporate-ca-certificate) |
 | Connection failure, curl 6/7 | DNS, proxy, and organization network policy |
 | Sandbox creation fails immediately with a `snyk-ads: ERROR` | `SNYK_COMPONENTS` itself — an unknown component name, or a value that resolves to none (see [Components](#components)) |
-| Binary installed but Agent scan/guard hooks inactive | Missing credential for that component — install logs say so; set it and recreate the sandbox |
-| No Scan binary | Whether `scan` was actually requested in `SNYK_COMPONENTS` |
+| Binary installed but Agent Scan / Agent Guard hooks inactive | Missing credential for that component — install logs say so; set it and recreate the sandbox |
+| No Agent Scan binary | Whether `scan` was actually requested in `SNYK_COMPONENTS` |
 | No recurring output | Startup log and sbx version |

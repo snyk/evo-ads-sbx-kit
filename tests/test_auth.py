@@ -348,7 +348,7 @@ class InstallStudioShTests(KitTestCase):
 class InstallScanAndGuardStepTests(KitTestCase):
     def setUp(self):
         super().setUp()
-        self.script = extract_step('Install AgentScan and/or Guard')
+        self.script = extract_step('Install Agent Scan and/or Agent Guard')
         self.mock_agent_scan()
 
     def run_step(self, **overrides):
@@ -357,7 +357,7 @@ class InstallScanAndGuardStepTests(KitTestCase):
     def test_skips_when_neither_scan_nor_guard_requested(self):
         result = self.run_step(SNYK_COMPONENTS='studio')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('skipping AgentScan install', result.stdout)
+        self.assertIn('skipping Agent Scan install', result.stdout)
         self.assertFalse(self.agent_scan.exists())
         self.assertFalse((self.home / 'downloads').exists())
 
@@ -376,7 +376,7 @@ class InstallScanAndGuardStepTests(KitTestCase):
                 self.assertTrue(os.access(self.agent_scan, os.X_OK))
                 self.assertFalse((self.home / 'guard-invocations').exists())
                 if 'guard' in components:
-                    self.assertIn('skipping Guard hook installation', result.stdout)
+                    self.assertIn('skipping Agent Guard hook installation', result.stdout)
                     self.assertIn('recreate the sandbox', result.stdout)
 
     def test_guard_with_token_only_installs_binary_without_guard_hooks(self):
