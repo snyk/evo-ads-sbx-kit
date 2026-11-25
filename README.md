@@ -56,19 +56,21 @@ snyk-evo-ads/
 ├── files/home/
 │   ├── .snyk-kit/   # Component selection, auth, and download helpers
 │   └── corp-ca/     # Optional corporate root certificates
-└── tests/           # Offline unit tests and Docker CA trust-store checks
+└── tests/           # Offline unit tests, Docker CA trust-store checks, and
+                     # the live Dependency Firewall probe
 ```
 
 ## Components
 
 Select what to install with `SNYK_COMPONENTS`, a comma-separated list of
-`scan`, `guard`, and/or `studio`. It defaults to `scan` when omitted.
+`scan`, `guard`, `studio`, and/or `firewall`. It defaults to `scan` when omitted.
 
 | Component | Credential to activate | Notes |
 | --- | --- | --- |
 | `scan` (Agent Scan) | `SNYK_TOKEN`, or `SNYK_ADS_PUSH_KEY` | Free-tier with a token, or enterprise upload with a push key |
 | `guard` (Agent Guard) | `SNYK_ADS_PUSH_KEY` | `SNYK_TENANT_ID` is optional — Agent Guard only needs it for the interactive push-key-minting flow this kit never uses |
 | `studio` (Snyk Studio) | none to install | Optional `SNYK_TOKEN` authenticates its Snyk CLI afterward |
+| `firewall` (Snyk Dependency Firewall, preview) | `SNYK_TENANT_ID`, plus an sbx custom secret for `SNYK_DF_TOKEN` | Routes npm, pip and uv through the tenant's Snyk registry; see [Dependency Firewall](#dependency-firewall-preview) |
 
 Agent Scan and Agent Guard are the same `agent-scan` binary (downloaded once, from
 [github.com/snyk/agent-scan releases](https://github.com/snyk/agent-scan/releases),
@@ -139,6 +141,68 @@ No credential is required to install Studio. Studio's Snyk CLI can instead
 authenticate interactively via `snyk_auth`/`snyk auth` inside the sandbox, or
 you can pass `-e SNYK_TOKEN` alongside `SNYK_COMPONENTS=studio` to
 pre-authenticate it. Never paste credentials into the agent conversation.
+
+### Dependency Firewall (preview)
+
+Snyk Dependency Firewall checks every package npm, pip and uv request
+against the tenant's policy before it installs: known malware is blocked,
+and versions inside a cooldown window are held back in favor of the newest
+allowed one. Each request appears in Evo under **Application Supply Chain >
+Install requests**. Dependency Firewall is an Experimental Preview; the
+tenant needs the Application Supply Chain entitlement. Find the tenant ID in
+Evo under **Application Supply Chain > Connections**.
+
+Store the Snyk token as an sbx custom secret, so the sandbox only ever sees a
+placeholder and the sbx proxy substitutes the real token on requests to
+`api.snyk.io`:
+
+```bash
+printf '%s' "$SNYK_TOKEN" | sbx secret set-custom \
+  --host api.snyk.io --env SNYK_DF_TOKEN --value-stdin
+# or, from 1Password:
+# sbx secret set-custom --host api.snyk.io --env SNYK_DF_TOKEN --ref "op://<vault>/<item>/<field>"
+```
+
+Then add `firewall` to `SNYK_COMPONENTS` and deny the public registries, so
+packages can only arrive through the firewall:
+
+```bash
+sbx run docker.io/sbx/claude:2.1.267 \
+  --kit "$PWD" \
+  --name "$(hostname)-sandbox-firewall" \
+  -e SNYK_COMPONENTS=scan,guard,firewall \
+  -e SNYK_ADS_PUSH_KEY \
+  -e SNYK_TENANT_ID \
+  --deny-network registry.npmjs.org \
+  --deny-network registry.yarnpkg.com \
+  --deny-network pypi.org \
+  --deny-network files.pythonhosted.org
+```
+
+The kit writes `~/.npmrc` (registry `.../registry/npm_portable/`) and
+exports `PIP_INDEX_URL`, `UV_INDEX_URL` and `UV_DEFAULT_INDEX` (index
+`.../registry/pypi/simple/`) in every agent shell. Neither file contains the
+token: both reference `SNYK_DF_TOKEN`. Without a custom secret, passing
+`-e SNYK_DF_TOKEN="$SNYK_TOKEN"` also works but places the real token in the
+sandbox. The firewall hook runs after the kit's own installs, so Agent Scan
+and Studio still install from their public sources during setup; the firewall
+governs every package the agent installs once the sandbox is running. `SNYK_API` moves the
+registry host for other regions, for example `https://api.eu.snyk.io`.
+
+The deny flags are per sandbox and can only narrow egress, so they are safe
+under centralized governance. They are passed at creation rather than declared
+by the kit, because a kit-level deny would also apply to sandboxes that do not
+select `firewall`.
+
+Check a running sandbox with the live probe:
+
+```bash
+cp tests/dependency-firewall-probe.sh /tmp/<workspace>/
+sbx exec "<sandbox-name>" bash -lc 'bash /tmp/<workspace>/dependency-firewall-probe.sh'
+```
+
+System Python in Debian-based agent images is externally managed (PEP 668),
+so install Python packages with `uv` or into a virtual environment.
 
 ### Custom Snyk API base (`SNYK_API`)
 
@@ -214,7 +278,7 @@ validation rules.
 
 The kit allows `**.snyk.io` (any host under `snyk.io`, any subdomain depth —
 covers `api.snyk.io`, `deeproxy.snyk.io`, `downloads.snyk.io`, and a custom
-`SNYK_API` host), plus `registry.npmjs.org`, `github.com`, and
+`SNYK_API` host and the Dependency Firewall registry), plus `registry.npmjs.org`, `github.com`, and
 `release-assets.githubusercontent.com`. Snyk Code (SAST) needs access to
 `deeproxy.snyk.io`; Agent Scan, Agent Guard, and Studio binaries download from
 `github.com`/`release-assets.githubusercontent.com`. Organization policy may
@@ -253,7 +317,7 @@ sbx exec "<sandbox-name>" sh -c 'cat "$HOME/.snyk/agent-scan-startup.log"'
 
 Replace `<sandbox-name>` with the name passed at creation.
 
-`resolve-components.sh` prints `scan=0|1 guard=0|1 studio=0|1
+`resolve-components.sh` prints `scan=0|1 guard=0|1 studio=0|1 firewall=0|1
 auth_mode=enterprise|standalone|none` and fails only if `SNYK_COMPONENTS`
 itself is malformed (an unknown component, or a value that resolves to
 none). Agent Scan and Agent Guard always share
@@ -268,3 +332,6 @@ none). Agent Scan and Agent Guard always share
 | Binary installed but Agent Scan / Agent Guard hooks inactive | Missing credential for that component — install logs say so; set it and recreate the sandbox |
 | No Agent Scan binary | Whether `scan` was actually requested in `SNYK_COMPONENTS` |
 | No recurring output | Startup log and sbx version |
+| `npm install` or `pip` gets 401 from `api.snyk.io` with `firewall` selected | The `SNYK_DF_TOKEN` custom secret: `sbx secret ls` should list `api.snyk.io`; set it and recreate the sandbox |
+| 403 `Snyk Malicious Code Defense not enabled for tenant` | The tenant lacks the Application Supply Chain entitlement, or `SNYK_TENANT_ID` points at the wrong tenant |
+| npm `ETARGET` or `Blocked … Cooldown policy` | Expected: a policy held back that version; npm resolves the newest allowed one |

@@ -9,6 +9,9 @@
   `sbx run docker.io/sbx/claude:2.1.267 --kit "$PWD" --detach`.
   Older sbx releases reject `sbx/claude` (`agent "claude" is already
   registered`), and sbx rejects the literal `--kit .`, so use the absolute path.
+- For a live Dependency Firewall check, copy
+  `tests/dependency-firewall-probe.sh` into the sandbox workspace and run it
+  with `sbx exec` (`sbx cp` leaves the file unreadable to the agent user).
 - For real CA trust-store checks without sbx credentials, run
   `python3 tests/corp_ca_container.py` (Docker and the local shell sandbox
   template required; see the script).

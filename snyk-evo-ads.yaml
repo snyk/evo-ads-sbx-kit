@@ -3,11 +3,11 @@
 schemaVersion: "3"
 kind: mixin
 displayName: Snyk Evo ADS
-description: "Installs Snyk Agent Scan, Agent Guard, and/or Snyk Studio, selected via SNYK_COMPONENTS, directly from their public release channels"
+description: "Installs Snyk Agent Scan, Agent Guard, and/or Snyk Studio, and optionally routes npm, pip and uv through Snyk Dependency Firewall, selected via SNYK_COMPONENTS"
 sourceUrl: https://github.com/docker/sbx-kits-contrib/tree/v3/snyk-evo-ads
 licenses:
   - Apache-2.0
-version: "1.1.0"
+version: "1.2.0"
 iconUrl: https://raw.githubusercontent.com/snyk/evo-ads-sbx-kit/main/icon.png
 
 # Agent-agnostic: there is no agent requirement. Guard installs hooks for
@@ -124,7 +124,7 @@ capabilities:
             set -eu
             COMPONENTS_OUTPUT="$(sh "$HOME/.snyk-kit/resolve-components.sh")" || exit 1
             eval "$COMPONENTS_OUTPUT"
-            echo "snyk-ads: components scan=$scan guard=$guard studio=$studio (auth_mode=$auth_mode)"
+            echo "snyk-ads: components scan=$scan guard=$guard studio=$studio firewall=$firewall (auth_mode=$auth_mode)"
             if [ "$auth_mode" = none ]; then
               echo "snyk-ads: no SNYK_TOKEN or SNYK_ADS_PUSH_KEY supplied; binaries install, but Agent Scan/Agent Guard hooks stay inactive until a credential is set and the sandbox is recreated."
             fi
@@ -211,6 +211,25 @@ capabilities:
             fi
 
             sh "$HOME/.snyk-kit/install-studio.sh"
+
+        - description: "Configure Snyk Dependency Firewall"
+          user: "0"
+          env: [SNYK_COMPONENTS, SNYK_TOKEN, SNYK_ADS_PUSH_KEY, SNYK_TENANT_ID, SNYK_API]
+          command: |
+            set -eu
+            # Runs last on purpose: the kit's own installs (Studio uses npm)
+            # keep using the public registries during the install phase, so
+            # a firewall cooldown can never block a fresh Snyk release. The
+            # firewall governs what the agent installs once the sandbox runs.
+            # Root hook: HOME is not the agent's, so call the staged helpers by path.
+            KIT=/home/agent/.snyk-kit
+            COMPONENTS_OUTPUT="$(sh "$KIT/resolve-components.sh")" || exit 1
+            eval "$COMPONENTS_OUTPUT"
+            if [ "$firewall" != 1 ]; then
+              echo "snyk-df: firewall not requested; skipping."
+              exit 0
+            fi
+            sh "$KIT/configure-firewall.sh"
 
       # Temporary recurring scans until ADS supports Linux scheduling.
       startup:

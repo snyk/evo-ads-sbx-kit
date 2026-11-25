@@ -154,30 +154,30 @@ class ResolveComponentsTests(KitTestCase):
     def test_defaults_to_scan_only(self):
         result = self.resolve_components(SNYK_TOKEN='token')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), 'scan=1 guard=0 studio=0 auth_mode=standalone')
+        self.assertEqual(result.stdout.strip(), 'scan=1 guard=0 studio=0 firewall=0 auth_mode=standalone')
 
     def test_explicit_selection_is_case_and_space_insensitive(self):
         result = self.resolve_components(SNYK_COMPONENTS=' Scan, GUARD ,studio', SNYK_ADS_PUSH_KEY='key')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), 'scan=1 guard=1 studio=1 auth_mode=enterprise')
+        self.assertEqual(result.stdout.strip(), 'scan=1 guard=1 studio=1 firewall=0 auth_mode=enterprise')
 
     def test_studio_alone_needs_no_credentials(self):
         result = self.resolve_components(SNYK_COMPONENTS='studio')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), 'scan=0 guard=0 studio=1 auth_mode=none')
+        self.assertEqual(result.stdout.strip(), 'scan=0 guard=0 studio=1 firewall=0 auth_mode=none')
 
     def test_guard_without_push_key_resolves_in_standalone_mode(self):
         result = self.resolve_components(SNYK_COMPONENTS='guard', SNYK_TOKEN='token')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), 'scan=0 guard=1 studio=0 auth_mode=standalone')
+        self.assertEqual(result.stdout.strip(), 'scan=0 guard=1 studio=0 firewall=0 auth_mode=standalone')
 
     def test_missing_credentials_do_not_change_selected_components(self):
         for components, expected in (
-            ('', 'scan=1 guard=0 studio=0'),
-            ('scan', 'scan=1 guard=0 studio=0'),
-            ('guard', 'scan=0 guard=1 studio=0'),
-            ('scan,guard', 'scan=1 guard=1 studio=0'),
-            ('scan,guard,studio', 'scan=1 guard=1 studio=1'),
+            ('', 'scan=1 guard=0 studio=0 firewall=0'),
+            ('scan', 'scan=1 guard=0 studio=0 firewall=0'),
+            ('guard', 'scan=0 guard=1 studio=0 firewall=0'),
+            ('scan,guard', 'scan=1 guard=1 studio=0 firewall=0'),
+            ('scan,guard,studio', 'scan=1 guard=1 studio=1 firewall=0'),
         ):
             with self.subTest(components=components):
                 result = self.resolve_components(SNYK_COMPONENTS=components)
@@ -188,7 +188,7 @@ class ResolveComponentsTests(KitTestCase):
     def test_scan_accepts_push_key_without_token(self):
         result = self.resolve_components(SNYK_COMPONENTS='scan', SNYK_ADS_PUSH_KEY='key')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), 'scan=1 guard=0 studio=0 auth_mode=enterprise')
+        self.assertEqual(result.stdout.strip(), 'scan=1 guard=0 studio=0 firewall=0 auth_mode=enterprise')
 
     def test_unknown_component_fails(self):
         result = self.resolve_components(SNYK_COMPONENTS='scn')
@@ -208,7 +208,7 @@ class ResolveComponentsStepTests(KitTestCase):
         result = self.run_shell(extract_step('Resolve requested Snyk components'),
                                 SNYK_COMPONENTS='scan,guard')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('scan=1 guard=1 studio=0 (auth_mode=none)', result.stdout)
+        self.assertIn('scan=1 guard=1 studio=0 firewall=0 (auth_mode=none)', result.stdout)
         self.assertIn('hooks stay inactive', result.stdout)
         self.assertIn('sandbox is recreated', result.stdout)
 
@@ -529,6 +529,129 @@ sleep() { [ "$1" = 900 ] || exit 99; wait=$((wait+1)); [ "$wait" -lt 2 ]; }
         self.assertIn(
             '--analysis-url https://api.example-region.snyk.io/hidden/mcp-scan/analysis-machine?version=2026-07-10',
             scans[0])
+
+
+class FirewallComponentTests(KitTestCase):
+    def test_firewall_alone_is_a_valid_selection(self):
+        result = self.resolve_components(SNYK_COMPONENTS='firewall')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'scan=0 guard=0 studio=0 firewall=1 auth_mode=none')
+
+    def test_firewall_combines_with_other_components(self):
+        result = self.resolve_components(SNYK_COMPONENTS='scan,guard,firewall', SNYK_ADS_PUSH_KEY='key')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'scan=1 guard=1 studio=0 firewall=1 auth_mode=enterprise')
+
+
+class ConfigureFirewallShTests(KitTestCase):
+    """configure-firewall.sh writes registry config and never a credential."""
+
+    TENANT = '5de58927-c755-459c-a437-4eed582af6fe'
+
+    def setUp(self):
+        super().setUp()
+        self.npmrc = self.home / 'agent/.npmrc'
+        self.profile = self.home / 'sandbox-persistent.sh'
+        self.env.update({'SNYK_DF_NPMRC': str(self.npmrc), 'SNYK_DF_PROFILE': str(self.profile),
+                         'SNYK_DF_TOKEN': 'real-secret-value'})
+
+    def configure(self, **overrides):
+        return self.run_shell('sh "$HOME/.snyk-kit/configure-firewall.sh"', **overrides)
+
+    def test_writes_npm_and_pip_config_for_tenant(self):
+        result = self.configure(SNYK_TENANT_ID=self.TENANT)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        registry = f'https://api.snyk.io/hidden/tenants/{self.TENANT}/registry'
+        npmrc = self.npmrc.read_text()
+        self.assertIn(f'registry={registry}/npm_portable/\n', npmrc)
+        self.assertIn(f'//{registry[8:]}/npm_portable/:_authToken=${{SNYK_DF_TOKEN}}\n', npmrc)
+        self.assertEqual(self.npmrc.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('always-auth', npmrc)  # unknown to current npm; warns on every command
+        profile = self.profile.read_text()
+        self.assertIn(f'export SNYK_DF_REGISTRY="{registry}"', profile)
+        self.assertIn(f'@{registry[8:]}/pypi/simple/"', profile)
+        self.assertIn('export UV_DEFAULT_INDEX="$PIP_INDEX_URL"', profile)
+
+    def test_never_writes_the_token_value(self):
+        self.configure(SNYK_TENANT_ID=self.TENANT, SNYK_TOKEN='other-secret')
+        for path in (self.npmrc, self.profile):
+            text = path.read_text()
+            self.assertNotIn('real-secret-value', text)
+            self.assertNotIn('other-secret', text)
+
+    def test_profile_resolves_pip_index_in_a_shell(self):
+        self.configure(SNYK_TENANT_ID=self.TENANT)
+        result = self.run_shell(f'. "{self.profile}"; printf "%s|%s" "$PIP_INDEX_URL" "$UV_INDEX_URL"',
+                                SNYK_DF_TOKEN='placeholder-123')
+        index = f'https://snyk:placeholder-123@api.snyk.io/hidden/tenants/{self.TENANT}/registry/pypi/simple/'
+        self.assertEqual(result.stdout, f'{index}|{index}')
+
+    def test_does_not_fall_back_to_snyk_token(self):
+        self.configure(SNYK_TENANT_ID=self.TENANT)
+        result = self.run_shell(f'. "{self.profile}"; printf "%s" "$PIP_INDEX_URL"',
+                                SNYK_DF_TOKEN='', SNYK_TOKEN='tok')
+        self.assertNotIn('tok', result.stdout)
+        self.assertIn('https://snyk:@api.snyk.io/', result.stdout)
+
+    def test_rerun_replaces_block_and_keeps_other_profile_lines(self):
+        self.profile.write_text('unset NPM_CONFIG_PREFIX\n')
+        self.configure(SNYK_TENANT_ID=self.TENANT)
+        self.configure(SNYK_TENANT_ID=self.TENANT, SNYK_API='https://api.eu.snyk.io/')
+        profile = self.profile.read_text()
+        self.assertEqual(profile.count('# snyk-df begin'), 1)
+        self.assertTrue(profile.startswith('unset NPM_CONFIG_PREFIX\n'))
+        self.assertIn('api.eu.snyk.io/hidden/tenants/', profile)
+        self.assertNotIn('//api.snyk.io', self.npmrc.read_text())
+
+    def test_missing_tenant_skips_without_failing(self):
+        result = self.configure(SNYK_TENANT_ID='')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('SNYK_TENANT_ID is not set', result.stdout)
+        self.assertFalse(self.npmrc.exists())
+
+    def test_rejects_malformed_tenant_and_non_https_api(self):
+        for overrides in ({'SNYK_TENANT_ID': '../../etc'}, {'SNYK_TENANT_ID': self.TENANT, 'SNYK_API': 'http://api.snyk.io'}):
+            with self.subTest(overrides=overrides):
+                result = self.configure(**overrides)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.npmrc.exists())
+
+
+class ConfigureFirewallStepTests(KitTestCase):
+    def setUp(self):
+        super().setUp()
+        # The root hook calls helpers under /home/agent; point it at the fake home.
+        self.script = extract_step('Configure Snyk Dependency Firewall').replace(
+            'KIT=/home/agent/.snyk-kit', 'KIT="$HOME/.snyk-kit"')
+        self.env.update({'SNYK_DF_NPMRC': str(self.home / '.npmrc'),
+                         'SNYK_DF_PROFILE': str(self.home / 'profile')})
+
+    def test_skips_when_not_requested(self):
+        result = self.run_shell(self.script, SNYK_COMPONENTS='scan,guard,studio',
+                                SNYK_TENANT_ID=ConfigureFirewallShTests.TENANT)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('firewall not requested', result.stdout)
+        self.assertFalse((self.home / '.npmrc').exists())
+
+    def test_configures_when_requested(self):
+        result = self.run_shell(self.script, SNYK_COMPONENTS='firewall',
+                                SNYK_TENANT_ID=ConfigureFirewallShTests.TENANT)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('npm, pip and uv resolve through', result.stdout)
+        self.assertTrue((self.home / '.npmrc').exists())
+
+    def test_malformed_components_abort(self):
+        result = self.run_shell(self.script, SNYK_COMPONENTS='firewal')
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_runs_after_every_other_install_hook(self):
+        # Studio installs with npm. If ~/.npmrc pointed at the firewall first,
+        # that install would need SNYK_DF_TOKEN and could hit a cooldown.
+        text = (ROOT / 'snyk-evo-ads.yaml').read_text()
+        install = text[text.index('      install:\n'):text.index('      startup:\n')]
+        descriptions = [line.split('description: "', 1)[1].rstrip('"')
+                        for line in install.splitlines() if '- description: "' in line]
+        self.assertEqual(descriptions[-1], 'Configure Snyk Dependency Firewall')
 
 
 if __name__ == '__main__':

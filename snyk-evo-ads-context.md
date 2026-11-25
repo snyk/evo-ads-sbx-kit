@@ -1,11 +1,11 @@
 ## Agent security scans
 
 This kit installs the Snyk components requested via SNYK_COMPONENTS
-(comma-separated: scan, guard, studio; default "scan") into the sandbox
+(comma-separated: scan, guard, studio, firewall; default "scan") into the sandbox
 during setup, unconditionally - the Agent Scan/Agent Guard/Snyk Studio binaries are
 public and install regardless of credentials. Check what was actually
 requested with `sh "$HOME/.snyk-kit/resolve-components.sh"`, which prints
-`scan=0|1 guard=0|1 studio=0|1 auth_mode=enterprise|standalone|none`.
+`scan=0|1 guard=0|1 studio=0|1 firewall=0|1 auth_mode=enterprise|standalone|none`.
 auth_mode=none means Agent Scan/Agent Guard hooks are inactive even if selected -
 that's expected when no SNYK_TOKEN or SNYK_ADS_PUSH_KEY was supplied, not
 an install failure. Do not print credentials.
@@ -62,3 +62,29 @@ absent from PATH. Use Studio's discovery helpers or locate the installed
 executable before claiming it is missing. Do not reinstall it for an
 authentication error. Credential presence is not proof of validity;
 verify with the requested scan and report actual authentication failures.
+
+## Snyk Dependency Firewall
+
+When the firewall component is configured, SNYK_DF_REGISTRY is set and
+package installs go through Snyk Dependency Firewall: npm uses the Snyk
+registry in ~/.npmrc, and pip/uv use $PIP_INDEX_URL. The sandbox may also
+block the public registries (registry.npmjs.org, pypi.org,
+files.pythonhosted.org) at its network boundary. Never try to get around
+the firewall with another registry, a mirror, a git URL or a direct
+tarball.
+
+The firewall hides versions that break the tenant's policy, such as a
+cooldown on newly published versions or known malware. When a version
+"doesn't exist" (npm ETARGET/notarget, pip "no matching distribution") or
+an install returns 403, assume the Snyk policy blocked it rather than
+concluding it was never published. To get the reason for an npm package,
+request its tarball and read the JSON response (`matched_rules`, `reason`),
+expanding the token in the shell and never printing it:
+`curl -s -H "Authorization: Bearer $SNYK_DF_TOKEN" "$SNYK_DF_REGISTRY/npm_portable/<name>/-/<name>-<version>.tgz"`
+(scoped: `$SNYK_DF_REGISTRY/npm_portable/@<scope>/<name>/-/<name>-<version>.tgz`).
+
+Report a block as "Blocked by Snyk Dependency Firewall (<rule>): <reason>",
+offer the newest allowed version, and don't install a different version
+without asking. System Python here is externally managed (PEP 668); install
+Python packages into a virtual environment or with uv, which both use the
+firewall index.
